@@ -1,0 +1,1 @@
+/home/gedeon/Documents/App/scheduling-management-app/implementation/frontend/scheduling_management_app/build/app/intermediates/cxx/Debug/8594w1w1/obj/arm64-v8a

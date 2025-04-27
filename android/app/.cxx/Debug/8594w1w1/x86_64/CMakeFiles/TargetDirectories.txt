@@ -1,0 +1,2 @@
+/home/gedeon/Documents/App/scheduling-management-app/implementation/frontend/scheduling_management_app/android/app/.cxx/Debug/8594w1w1/x86_64/CMakeFiles/edit_cache.dir
+/home/gedeon/Documents/App/scheduling-management-app/implementation/frontend/scheduling_management_app/android/app/.cxx/Debug/8594w1w1/x86_64/CMakeFiles/rebuild_cache.dir

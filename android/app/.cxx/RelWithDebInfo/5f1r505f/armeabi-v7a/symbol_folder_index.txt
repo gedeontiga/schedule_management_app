@@ -1,0 +1,1 @@
+/home/gedeon/Documents/App/scheduling-management-app/implementation/frontend/scheduling_management_app/build/app/intermediates/cxx/RelWithDebInfo/5f1r505f/obj/armeabi-v7a

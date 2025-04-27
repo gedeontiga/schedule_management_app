@@ -1,0 +1,2 @@
+/home/gedeon/Documents/App/scheduling-management-app/implementation/frontend/scheduling_management_app/android/app/.cxx/RelWithDebInfo/5f1r505f/armeabi-v7a/CMakeFiles/edit_cache.dir
+/home/gedeon/Documents/App/scheduling-management-app/implementation/frontend/scheduling_management_app/android/app/.cxx/RelWithDebInfo/5f1r505f/armeabi-v7a/CMakeFiles/rebuild_cache.dir
