@@ -3,12 +3,11 @@ package com.example.scheduling_management_app
 import io.flutter.embedding.android.FlutterFragmentActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugins.GeneratedPluginRegistrant
-import androidx.annotation.NonNull
 import android.os.Bundle
 import android.view.KeyEvent
 
 class MainActivity: FlutterFragmentActivity() {
-    override fun configureFlutterEngine(@NonNull flutterEngine: FlutterEngine) {
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         GeneratedPluginRegistrant.registerWith(flutterEngine)
     }
     
@@ -16,20 +15,18 @@ class MainActivity: FlutterFragmentActivity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         
-        // Forward the authentication result to any waiting Flutter plugins
-        io.flutter.plugin.common.PluginRegistry.ActivityResultListener::class.java.declaredMethods
-            .firstOrNull { it.name == "onActivityResult" }
-            ?.let { method ->
-                plugins.forEach { plugin ->
-                    if (plugin is io.flutter.plugin.common.PluginRegistry.ActivityResultListener) {
-                        try {
-                            method.invoke(plugin, requestCode, resultCode, data)
-                        } catch (e: Exception) {
-                            android.util.Log.e("MainActivity", "Error forwarding activity result", e)
-                        }
-                    }
-                }
-            }
+        // The super class (FlutterFragmentActivity) should automatically pass results to plugins
+        // This override is just to ensure the activity lifecycle is properly managed
+    }
+    
+    // Add this to ensure proper activity state management
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Set proper window flags for authentication activities
+        window.setFlags(
+            android.view.WindowManager.LayoutParams.FLAG_SECURE,
+            android.view.WindowManager.LayoutParams.FLAG_SECURE
+        )
     }
     
     // Override onKeyDown to properly handle back button during authentication
