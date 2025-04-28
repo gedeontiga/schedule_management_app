@@ -1,3 +1,5 @@
+import 'package:uuid/uuid.dart';
+
 import '../../models/permutation_request.dart';
 import '../utils/supabase_manager.dart';
 
@@ -7,15 +9,19 @@ class NotificationService {
   Future<void> sendInvitation(
       String scheduleId, String userId, String roles) async {
     try {
-      await _supabase.from('notifications').insert({
-        'user_id': userId,
+      final notification = {
+        'id': const Uuid().v4(),
+        'user_id': userId, // Recipient of the invitation
+        'creator_id':
+            SupabaseManager.getCurrentUserId(), // Sender (authenticated user)
         'type': 'invitation',
         'data': {
           'schedule_id': scheduleId,
           'roles': roles,
-          'status': 'pending',
         },
-      });
+        'created_at': DateTime.now().toIso8601String(),
+      };
+      await _supabase.from('notifications').insert(notification);
     } catch (e) {
       throw Exception('Failed to send invitation: $e');
     }

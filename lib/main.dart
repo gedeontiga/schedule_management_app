@@ -11,7 +11,7 @@ import 'screens/login_screen.dart';
 import 'screens/registration_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/schedule_creation_screen.dart';
-import 'screens/schedule_edit_screen.dart';
+// import 'screens/schedule_edit_screen.dart';
 import 'screens/schedule_management_screen.dart';
 import 'screens/permutation_request_screen.dart';
 import 'screens/biometric_auth_screen.dart';
@@ -83,8 +83,6 @@ class MyApp extends StatelessWidget {
         '/create-schedule': (context) => const ScheduleCreationScreen(),
         '/manage-schedule': (context) => const ScheduleManagementScreen(),
         '/permutation-request': (context) => const PermutationRequestScreen(),
-        '/edit-schedule': (context) =>
-            const ScheduleEditScreen(), // Add new route
         '/biometric-auth': (context) {
           final scheduleId =
               ModalRoute.of(context)?.settings.arguments as String?;

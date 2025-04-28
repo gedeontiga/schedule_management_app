@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../core/constants/app_colors.dart';
 import '../core/utils/validators.dart';
 import '../core/widgets/connection_status_indicator.dart';
@@ -23,7 +25,6 @@ class LoginScreenState extends State<LoginScreen>
   bool _isLoading = false;
   bool _obscurePassword = true;
   String? _errorMessage;
-
   late AnimationController _animationController;
   late Animation<double> _fadeInAnimation;
   late Animation<Offset> _slideAnimation;
@@ -31,25 +32,47 @@ class LoginScreenState extends State<LoginScreen>
   @override
   void initState() {
     super.initState();
+    _checkCachedSession(); // Check for cached session
     _animationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 800),
     );
-    _fadeInAnimation = Tween<double>(
-      begin: 0.0,
-      end: 1.0,
-    ).animate(CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.easeIn,
-    ));
-    _slideAnimation = Tween<Offset>(
-      begin: const Offset(0, 26),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(
-      parent: _animationController,
-      curve: Curves.easeOut,
-    ));
+    _fadeInAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeIn),
+    );
+    _slideAnimation =
+        Tween<Offset>(begin: const Offset(0, 26), end: Offset.zero).animate(
+      CurvedAnimation(parent: _animationController, curve: Curves.easeOut),
+    );
     _animationController.forward();
+  }
+
+  Future<void> _checkCachedSession() async {
+    final prefs = await SharedPreferences.getInstance();
+    final isLoggedIn = prefs.getBool('isLoggedIn') ?? false;
+
+    if (isLoggedIn) {
+      try {
+        // Check if a user is logged in using Supabase
+        final user = Supabase.instance.client.auth.currentUser;
+        if (user != null && mounted) {
+          Navigator.pushReplacementNamed(context, '/home');
+        } else {
+          // Clear cache if no user is found
+          await prefs.setBool('isLoggedIn', false);
+        }
+      } catch (e) {
+        // Clear cache on error
+        await prefs.setBool('isLoggedIn', false);
+        // print('Error checking session: $e');
+      }
+    }
+  }
+
+  // Cache login state after successful login
+  Future<void> _cacheLoginState() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('isLoggedIn', true);
   }
 
   @override
@@ -78,13 +101,21 @@ class LoginScreenState extends State<LoginScreen>
           _emailController.text.trim(),
           _passwordController.text,
         );
+        await _cacheLoginState(); // Cache login state
         if (mounted) {
           Navigator.pushReplacementNamed(context, '/home');
+        }
+      } on AuthException catch (e) {
+        if (mounted) {
+          setState(() {
+            _errorMessage =
+                e.message; // Extract the specific Supabase error message
+          });
         }
       } catch (e) {
         if (mounted) {
           setState(() {
-            _errorMessage = e.toString().replaceAll('Exception: ', '');
+            _errorMessage = 'An unexpected error occurred';
           });
         }
       } finally {

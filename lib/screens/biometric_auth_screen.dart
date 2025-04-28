@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
-import 'dart:io';
-import '../core/constants/app_colors.dart';
-import '../core/widgets/gradient_button.dart';
+import 'package:local_auth/error_codes.dart' as auth_error;
+import 'package:supabase_flutter/supabase_flutter.dart';
+// import '../core/constants/app_colors.dart';
+// import '../core/widgets/gradient_button.dart';
 
 class BiometricAuthScreen extends StatefulWidget {
   final String scheduleId;
-
   const BiometricAuthScreen({super.key, required this.scheduleId});
 
   @override
@@ -15,155 +15,294 @@ class BiometricAuthScreen extends StatefulWidget {
 
 class BiometricAuthScreenState extends State<BiometricAuthScreen> {
   final LocalAuthentication _auth = LocalAuthentication();
-  final _passwordController = TextEditingController();
+  final TextEditingController _emailController = TextEditingController();
+  final TextEditingController _passwordController = TextEditingController();
   bool _isAuthenticating = false;
-  bool _usePassword = false;
   String _errorMessage = '';
+  bool _canUseBiometrics = false;
+  bool _usePasswordFallback = false;
+  String _authInstruction = 'Checking authentication methods...';
 
-  Future<void> _authenticateWithBiometrics() async {
-    setState(() {
-      _isAuthenticating = true;
-      _errorMessage = '';
-    });
+  @override
+  void initState() {
+    super.initState();
+    _checkBiometricAvailability();
+  }
+
+  @override
+  void dispose() {
+    // Clean up controllers
+    _emailController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _checkBiometricAvailability() async {
     try {
-      bool authenticated = false;
-      if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-        authenticated = true;
+      final canAuthenticate =
+          await _auth.canCheckBiometrics || await _auth.isDeviceSupported();
+      String instruction;
+
+      if (canAuthenticate) {
+        final biometrics = await _auth.getAvailableBiometrics();
+        if (biometrics.contains(BiometricType.face)) {
+          instruction = 'Use Face ID or device credentials';
+        } else if (biometrics.contains(BiometricType.fingerprint)) {
+          instruction = 'Use fingerprint or device credentials';
+        } else {
+          instruction = 'Use PIN, pattern, or password';
+        }
       } else {
-        authenticated = await _auth.authenticate(
-          localizedReason: 'Authenticate to access the schedule',
-          options: const AuthenticationOptions(biometricOnly: true),
-        );
+        instruction = 'Device authentication not supported';
       }
-      if (authenticated && mounted) {
-        Navigator.pushReplacementNamed(context, '/manage-schedule',
-            arguments: widget.scheduleId);
-      } else {
+
+      if (mounted) {
         setState(() {
-          _errorMessage = 'Authentication failed';
+          _canUseBiometrics = canAuthenticate;
+          _authInstruction = instruction;
+          _usePasswordFallback = !canAuthenticate;
+          _errorMessage = '';
         });
+
+        // Automatically start authentication if biometrics are available
+        if (canAuthenticate) {
+          // Add delay to ensure UI is fully rendered
+          Future.delayed(const Duration(milliseconds: 300), () {
+            _authenticateWithBiometrics();
+          });
+        }
       }
     } catch (e) {
-      setState(() {
-        _errorMessage = 'Error: $e';
-        _usePassword = true; // Fallback to password if biometrics fail
-      });
-    } finally {
-      setState(() {
-        _isAuthenticating = false;
-      });
+      print('Error checking biometrics: $e');
+      if (mounted) {
+        setState(() {
+          _canUseBiometrics = false;
+          _authInstruction = 'Authentication not available';
+          _usePasswordFallback = true;
+          _errorMessage = 'Authentication not available on this device';
+        });
+      }
     }
   }
 
-  Future<void> _authenticateWithPassword() async {
+  Future<void> _authenticateWithBiometrics() async {
+    if (!_canUseBiometrics) {
+      setState(() {
+        _errorMessage = 'Authentication not supported on this device';
+        _usePasswordFallback = true;
+      });
+      return;
+    }
+
     setState(() {
       _isAuthenticating = true;
       _errorMessage = '';
     });
+
     try {
-      // For demo purposes, assume password is validated against a stored hash
-      // In a real app, validate against Supabase auth or a stored hash
-      if (_passwordController.text == 'password123') {
+      final authenticated = await _auth.authenticate(
+        localizedReason: 'Authenticate to access the schedule',
+        options: const AuthenticationOptions(
+          biometricOnly: false,
+          stickyAuth: true,
+        ),
+      );
+
+      // Make sure to check if the widget is still mounted before proceeding
+      if (!mounted) return;
+
+      if (authenticated) {
+        // Add a small delay to ensure the authentication UI is dismissed
+        await Future.delayed(const Duration(milliseconds: 200));
         if (mounted) {
+          // Navigate using pushReplacement to avoid keeping the auth screen in the stack
           Navigator.pushReplacementNamed(context, '/manage-schedule',
               arguments: widget.scheduleId);
         }
       } else {
         setState(() {
-          _errorMessage = 'Invalid password';
+          _errorMessage = 'Authentication failed';
+          _usePasswordFallback = true;
         });
       }
     } catch (e) {
+      String errorMessage;
+      if (e.toString().contains('no_fragment_activity')) {
+        errorMessage =
+            'Authentication not supported on this device configuration';
+        setState(() {
+          _usePasswordFallback = true;
+        });
+      } else if (e.toString() == auth_error.notAvailable) {
+        errorMessage = 'Authentication not available';
+      } else if (e.toString() == auth_error.notEnrolled) {
+        errorMessage = 'No biometric or device credentials enrolled';
+      } else if (e.toString() == auth_error.passcodeNotSet) {
+        errorMessage = 'Device passcode not set';
+      } else {
+        errorMessage = 'Error: $e';
+      }
+
       setState(() {
-        _errorMessage = 'Error: $e';
+        _errorMessage = errorMessage;
+        if (!e.toString().contains('no_fragment_activity')) {
+          _usePasswordFallback = true;
+        }
       });
     } finally {
+      if (mounted) {
+        setState(() {
+          _isAuthenticating = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _authenticateWithSupabasePassword() async {
+    final email = _emailController.text.trim();
+    final password = _passwordController.text;
+
+    if (email.isEmpty || password.isEmpty) {
       setState(() {
-        _isAuthenticating = false;
+        _errorMessage = 'Please enter email and password';
       });
+      return;
+    }
+
+    setState(() {
+      _isAuthenticating = true;
+      _errorMessage = '';
+    });
+
+    try {
+      final response = await Supabase.instance.client.auth.signInWithPassword(
+        email: email,
+        password: password,
+      );
+
+      if (!mounted) return;
+
+      if (response.session != null) {
+        // Navigate using pushReplacement to avoid keeping the auth screen in the stack
+        Navigator.pushReplacementNamed(context, '/manage-schedule',
+            arguments: widget.scheduleId);
+      } else {
+        setState(() {
+          _errorMessage = 'Invalid credentials';
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _errorMessage = 'Authentication failed: $e';
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isAuthenticating = false;
+        });
+      }
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [
-              AppColors.primary.withAlpha(204),
-              AppColors.primary.withAlpha(153),
-              AppColors.background,
-            ],
-          ),
-        ),
-        child: SafeArea(
-          child: Center(
-            child: Padding(
-              padding: const EdgeInsets.all(24.0),
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(
-                    Icons.fingerprint,
-                    size: 80,
-                    color: AppColors.primary,
-                  ),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Authenticate to Continue',
-                    style: TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: AppColors.textPrimary,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    _usePassword
-                        ? 'Enter your password'
-                        : Platform.isLinux ||
-                                Platform.isMacOS ||
-                                Platform.isWindows
-                            ? 'Click to authenticate (desktop mode)'
-                            : 'Use your fingerprint or device password',
-                    style: TextStyle(color: AppColors.textSecondary),
-                  ),
-                  if (_errorMessage.isNotEmpty) ...[
-                    const SizedBox(height: 16),
-                    Text(
-                      _errorMessage,
-                      style: const TextStyle(color: AppColors.error),
-                    ),
-                  ],
-                  const SizedBox(height: 24),
-                  if (_usePassword) ...[
-                    TextField(
-                      controller: _passwordController,
-                      obscureText: true,
-                      decoration: InputDecoration(
-                        labelText: 'Password',
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 16),
-                    GradientButton(
-                      text: 'Authenticate with Password',
-                      onPressed: _authenticateWithPassword,
-                      isLoading: _isAuthenticating,
-                    ),
-                  ] else
-                    GradientButton(
-                      text: 'Authenticate',
-                      onPressed: _authenticateWithBiometrics,
-                      isLoading: _isAuthenticating,
-                    ),
-                ],
-              ),
+      appBar: AppBar(
+        title: const Text('Authentication Required'),
+      ),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const SizedBox(height: 16),
+            Icon(
+              _canUseBiometrics ? Icons.fingerprint : Icons.lock,
+              size: 64,
+              color: Theme.of(context).primaryColor,
             ),
-          ),
+            const SizedBox(height: 16),
+            Text(
+              _authInstruction,
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 18),
+            ),
+            if (_errorMessage.isNotEmpty) ...[
+              const SizedBox(height: 16),
+              Text(
+                _errorMessage,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Theme.of(context).colorScheme.error),
+              ),
+            ],
+            const SizedBox(height: 24),
+            if (_canUseBiometrics && !_usePasswordFallback) ...[
+              ElevatedButton.icon(
+                icon: const Icon(Icons.fingerprint),
+                label: const Text('Authenticate'),
+                onPressed:
+                    _isAuthenticating ? null : _authenticateWithBiometrics,
+              ),
+              TextButton(
+                onPressed: () {
+                  setState(() {
+                    _usePasswordFallback = true;
+                  });
+                },
+                child: const Text('Use email and password instead'),
+              ),
+            ],
+            if (_usePasswordFallback) ...[
+              TextField(
+                controller: _emailController,
+                decoration: const InputDecoration(
+                  labelText: 'Email',
+                  border: OutlineInputBorder(),
+                ),
+                keyboardType: TextInputType.emailAddress,
+                enabled: !_isAuthenticating,
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: _passwordController,
+                decoration: const InputDecoration(
+                  labelText: 'Password',
+                  border: OutlineInputBorder(),
+                ),
+                obscureText: true,
+                enabled: !_isAuthenticating,
+              ),
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: _isAuthenticating
+                    ? null
+                    : _authenticateWithSupabasePassword,
+                child: _isAuthenticating
+                    ? const CircularProgressIndicator()
+                    : const Text('Sign In'),
+              ),
+              if (_canUseBiometrics) ...[
+                TextButton(
+                  onPressed: _isAuthenticating
+                      ? null
+                      : () {
+                          setState(() {
+                            _usePasswordFallback = false;
+                          });
+                          _authenticateWithBiometrics();
+                        },
+                  child: const Text('Use biometric authentication instead'),
+                ),
+              ],
+            ],
+            if (_isAuthenticating) ...[
+              const SizedBox(height: 16),
+              const Center(child: CircularProgressIndicator()),
+            ],
+          ],
         ),
       ),
     );

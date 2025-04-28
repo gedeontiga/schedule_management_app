@@ -6,6 +6,7 @@ class GradientButton extends StatelessWidget {
   final VoidCallback onPressed;
   final bool isLoading;
   final IconData? icon;
+  final bool enabled;
 
   const GradientButton({
     super.key,
@@ -13,6 +14,7 @@ class GradientButton extends StatelessWidget {
     required this.onPressed,
     this.isLoading = false,
     this.icon,
+    this.enabled = true,
   });
 
   @override

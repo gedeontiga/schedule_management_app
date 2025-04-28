@@ -30,6 +30,7 @@ dependencies:
   dartz: ^0.10.1
   flutter_local_notifications: ^19.1.0
   timezone: ^0.10.0
+  rxdart: ^0.28.0
 
 dev_dependencies:
   flutter_test:

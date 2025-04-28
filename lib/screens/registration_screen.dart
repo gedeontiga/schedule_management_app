@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../core/constants/app_colors.dart';
 import '../core/utils/validators.dart';
 import '../core/widgets/gradient_button.dart';
@@ -139,10 +140,17 @@ class RegistrationScreenState extends State<RegistrationScreen>
             ),
           );
         }
+      } on AuthException catch (e) {
+        if (mounted) {
+          setState(() {
+            _errorMessage =
+                e.message; // Extract the specific Supabase error message
+          });
+        }
       } catch (e) {
         if (mounted) {
           setState(() {
-            _errorMessage = e.toString().replaceAll('Exception: ', '');
+            _errorMessage = 'An unexpected error occurred: ${e.toString()}';
           });
         }
       } finally {
