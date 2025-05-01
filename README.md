@@ -2,7 +2,7 @@
 
 A comprehensive Flutter application that allows organizations to create and manage schedules with role-based permissions, user participation, offline capabilities, and real-time synchronization.
 
-![Schedule Management App](assets/images/schedule_app_logo.png)
+![Schedule Management App](assets/schedule_app_logo.png)
 
 ## Features
 
