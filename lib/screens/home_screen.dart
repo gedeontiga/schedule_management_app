@@ -2,11 +2,13 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:scheduling_management_app/core/utils/supabase_manager.dart';
+import 'schedule_creation_screen.dart';
+import 'package:local_auth/local_auth.dart';
 import '../core/constants/app_colors.dart';
 import '../core/services/schedule_service.dart';
 import '../models/schedule.dart';
-import 'schedule_creation_screen.dart';
+import 'package:intl/intl.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -17,6 +19,7 @@ class HomeScreen extends StatefulWidget {
 class HomeScreenState extends State<HomeScreen>
     with SingleTickerProviderStateMixin {
   final ScheduleService _scheduleService = ScheduleService();
+  final LocalAuthentication _auth = LocalAuthentication();
   List<Schedule> _schedules = [];
   bool _isLoading = false;
   bool _isError = false;
@@ -25,18 +28,18 @@ class HomeScreenState extends State<HomeScreen>
   late Animation<double> _fadeAnimation;
   String? _currentUserId;
   late StreamSubscription<List<Schedule>> _scheduleSubscription;
+  bool _canUseBiometrics = false;
 
   @override
   void initState() {
     super.initState();
-    _currentUserId = SupabaseManager.getCurrentUserId();
-    print('HomeScreen init with userId: $_currentUserId');
+    _currentUserId = Supabase.instance.client.auth.currentUser?.id;
     _animationController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 800),
+      duration: const Duration(milliseconds: 1000),
     );
     _fadeAnimation =
-        CurvedAnimation(parent: _animationController, curve: Curves.easeIn);
+        CurvedAnimation(parent: _animationController, curve: Curves.easeInOut);
     _animationController.forward();
 
     setState(() {
@@ -44,26 +47,141 @@ class HomeScreenState extends State<HomeScreen>
       _isError = false;
     });
 
-    _scheduleSubscription = _scheduleService.scheduleStream.listen((schedules) {
-      print('Home screen received schedules from stream: ${schedules.length}');
-      if (mounted) {
-        setState(() {
-          _schedules = schedules;
-          _isLoading = false;
-          _isError = false;
-        });
-      }
-    }, onError: (e) {
-      if (mounted) {
-        setState(() {
-          _isLoading = false;
-          _isError = true;
-          _errorMessage = e.toString();
-        });
-      }
-    });
+    _scheduleSubscription = _scheduleService.scheduleStream.listen(
+      (schedules) {
+        if (mounted) {
+          setState(() {
+            _schedules = schedules;
+            _isLoading = false;
+            _isError = false;
+          });
+        }
+      },
+      onError: (e) {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+            _isError = true;
+            _errorMessage = e.toString();
+          });
+        }
+      },
+    );
 
     _fetchSchedules();
+    _checkBiometricAvailability();
+  }
+
+  Future<void> _checkBiometricAvailability() async {
+    try {
+      final canAuthenticate =
+          await _auth.canCheckBiometrics || await _auth.isDeviceSupported();
+      if (mounted) {
+        setState(() {
+          _canUseBiometrics = canAuthenticate;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _canUseBiometrics = false;
+        });
+      }
+    }
+  }
+
+  Future<bool> _authenticateWithBiometrics(BuildContext context) async {
+    if (!_canUseBiometrics) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content:
+              Text('Biometric authentication not available on this device'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return false;
+    }
+
+    final completer = Completer<bool>();
+    try {
+      String localizedReason;
+      final biometrics = await _auth.getAvailableBiometrics();
+      if (biometrics.contains(BiometricType.face)) {
+        localizedReason =
+            'Authenticate with Face ID to access schedule details';
+      } else if (biometrics.contains(BiometricType.fingerprint)) {
+        localizedReason =
+            'Authenticate with fingerprint to access schedule details';
+      } else {
+        localizedReason = 'Authenticate to access schedule details';
+      }
+
+      final authenticated = await _auth.authenticate(
+        localizedReason: localizedReason,
+        options: const AuthenticationOptions(
+          biometricOnly: false,
+          stickyAuth: true,
+          sensitiveTransaction: true,
+        ),
+      );
+
+      completer.complete(authenticated);
+    } on PlatformException catch (e) {
+      String errorMessage;
+      switch (e.code) {
+        case 'LockedOut':
+          errorMessage = 'Too many attempts. Please try again later.';
+          break;
+        case 'NotAvailable':
+          errorMessage = 'Authentication not available';
+          break;
+        case 'NotEnrolled':
+          errorMessage = 'No biometric or device credentials enrolled';
+          break;
+        case 'PasscodeNotSet':
+          errorMessage = 'Device passcode not set';
+          break;
+        default:
+          errorMessage = 'Authentication error: ${e.message}';
+      }
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(errorMessage),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      completer.complete(false);
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Authentication error: ${e.toString()}'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      completer.complete(false);
+    }
+
+    return completer.future;
+  }
+
+  Future<void> _authenticateAndNavigate(String scheduleId) async {
+    HapticFeedback.selectionClick();
+
+    final authenticated = await _authenticateWithBiometrics(context);
+
+    if (authenticated && mounted) {
+      // Add a small delay to ensure the biometric dialog is dismissed
+      await Future.delayed(const Duration(milliseconds: 300));
+
+      if (mounted) {
+        Navigator.pushNamed(context, '/manage-schedule', arguments: scheduleId);
+      }
+    }
   }
 
   Future<void> _deleteSchedule(Schedule schedule) async {
@@ -121,10 +239,8 @@ class HomeScreenState extends State<HomeScreen>
         _isLoading = true;
         _isError = false;
       });
-
-      final userId = SupabaseManager.getCurrentUserId();
+      final userId = Supabase.instance.client.auth.currentUser?.id;
       if (userId == null) {
-        print('No user ID found');
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
@@ -140,10 +256,7 @@ class HomeScreenState extends State<HomeScreen>
         });
         return;
       }
-
       final schedules = await _scheduleService.getUserSchedules(userId);
-      print('Fetched ${schedules.length} schedules directly: $schedules');
-
       if (mounted) {
         setState(() {
           _schedules = schedules;
@@ -151,7 +264,6 @@ class HomeScreenState extends State<HomeScreen>
         });
       }
     } catch (e) {
-      print('Error fetching schedules: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -174,32 +286,15 @@ class HomeScreenState extends State<HomeScreen>
 
   Future<void> _navigateToCreateSchedule([Schedule? schedule]) async {
     HapticFeedback.mediumImpact();
-
-    // Debug logging to confirm schedule object is passed
-    if (schedule != null) {
-      print(
-          'Navigating to edit schedule: id=${schedule.id}, name=${schedule.name}');
-    } else {
-      print('Navigating to create new schedule');
-    }
-
-    // Wait for the result from the navigation
     final result = await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => ScheduleCreationScreen(schedule: schedule),
       ),
     );
-
-    // If we got a successful result, refresh schedules
     if (result == true) {
       _fetchSchedules();
     }
-  }
-
-  void _navigateToScheduleDetails(String scheduleId) {
-    HapticFeedback.selectionClick();
-    Navigator.pushNamed(context, '/biometric-auth', arguments: scheduleId);
   }
 
   @override
@@ -214,10 +309,9 @@ class HomeScreenState extends State<HomeScreen>
             begin: Alignment.topCenter,
             end: Alignment.bottomCenter,
             colors: [
-              AppColors.primary.withAlpha(239),
-              AppColors.background.withAlpha(243),
+              AppColors.primary.withValues(alpha: 0.5),
+              AppColors.secondary.withValues(alpha: 0.5),
             ],
-            stops: const [0.0, 0.7],
           ),
         ),
         child: SafeArea(
@@ -249,11 +343,12 @@ class HomeScreenState extends State<HomeScreen>
         onPressed: () => _navigateToCreateSchedule(),
         backgroundColor: AppColors.primary,
         tooltip: 'Create Schedule',
-        elevation: 4,
+        elevation: 6,
         icon: const Icon(Icons.add, color: AppColors.textOnPrimary),
         label: const Text(
           'New Schedule',
-          style: TextStyle(color: AppColors.textOnPrimary),
+          style: TextStyle(
+              color: AppColors.textOnPrimary, fontWeight: FontWeight.w600),
         ),
       ),
     );
@@ -278,9 +373,9 @@ class HomeScreenState extends State<HomeScreen>
                   fontWeight: FontWeight.w900,
                   color: AppColors.textOnPrimary,
                   shadows: [
-                    Shadow(
-                      blurRadius: 4,
-                      color: Colors.black.withAlpha(52),
+                    BoxShadow(
+                      blurRadius: 6,
+                      color: AppColors.textSecondary.withValues(alpha: 0.8),
                       offset: const Offset(2, 2),
                     ),
                   ],
@@ -291,7 +386,7 @@ class HomeScreenState extends State<HomeScreen>
                 'Manage your schedules with ease',
                 style: TextStyle(
                   fontSize: isLargeScreen ? 16 : 14,
-                  color: AppColors.textOnPrimary.withAlpha(204),
+                  color: AppColors.textOnPrimary,
                   fontWeight: FontWeight.w400,
                 ),
               ),
@@ -299,10 +394,9 @@ class HomeScreenState extends State<HomeScreen>
           ),
           CircleAvatar(
             radius: isLargeScreen ? 32 : 24,
-            backgroundImage: const AssetImage(
-              'assets/images/schedule_app_logo.png',
-            ),
-            backgroundColor: AppColors.primary.withAlpha(52),
+            backgroundImage:
+                const AssetImage('assets/images/schedule_app_logo.png'),
+            backgroundColor: AppColors.primary.withValues(alpha: 0.2),
           ),
         ],
       ),
@@ -321,10 +415,17 @@ class HomeScreenState extends State<HomeScreen>
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 8.0),
             child: Container(
-              height: 140,
+              height: 160,
               decoration: BoxDecoration(
-                color: AppColors.background.withAlpha(180),
+                color: AppColors.background.withValues(alpha: 0.7),
                 borderRadius: BorderRadius.circular(20),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.1),
+                    blurRadius: 8,
+                    offset: Offset(0, 2),
+                  ),
+                ],
               ),
               child: Center(
                 child: CircularProgressIndicator(
@@ -346,7 +447,7 @@ class HomeScreenState extends State<HomeScreen>
           Icon(
             Icons.error_outline,
             size: 80,
-            color: AppColors.warning.withAlpha(200),
+            color: AppColors.warning.withValues(alpha: 0.8),
           ),
           const SizedBox(height: 16),
           Text(
@@ -375,6 +476,9 @@ class HomeScreenState extends State<HomeScreen>
               backgroundColor: AppColors.primary,
               foregroundColor: AppColors.textOnPrimary,
               padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
             ),
           ),
         ],
@@ -383,7 +487,6 @@ class HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildScheduleList(bool isLargeScreen) {
-    // Group schedules by status
     final fullySetSchedules = _schedules.where((s) => s.isFullySet).toList();
     final draftSchedules = _schedules.where((s) => !s.isFullySet).toList();
 
@@ -402,7 +505,7 @@ class HomeScreenState extends State<HomeScreen>
               style: TextStyle(
                 fontSize: isLargeScreen ? 20 : 18,
                 fontWeight: FontWeight.w700,
-                color: AppColors.textPrimary.withAlpha(220),
+                color: AppColors.textPrimary,
               ),
             ),
           ),
@@ -419,7 +522,7 @@ class HomeScreenState extends State<HomeScreen>
               style: TextStyle(
                 fontSize: isLargeScreen ? 20 : 18,
                 fontWeight: FontWeight.w700,
-                color: AppColors.textPrimary.withAlpha(220),
+                color: AppColors.textPrimary,
               ),
             ),
           ),
@@ -453,17 +556,14 @@ class HomeScreenState extends State<HomeScreen>
                 ),
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(true),
-                  child:
-                      const Text('Delete', style: TextStyle(color: Colors.red)),
+                  child: const Text('Delete',
+                      style: TextStyle(color: AppColors.error)),
                 ),
               ],
             ),
           );
-
           if (shouldDelete == true) {
             _deleteSchedule(schedule);
-            // Return false so the Dismissible doesn't handle the dismiss,
-            // we'll update the list ourselves after the API call completes
             return false;
           }
           return false;
@@ -475,7 +575,7 @@ class HomeScreenState extends State<HomeScreen>
       },
       background: Container(
         decoration: BoxDecoration(
-          color: AppColors.primary.withAlpha(50),
+          color: AppColors.primary.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(20),
         ),
         alignment: Alignment.centerLeft,
@@ -484,12 +584,12 @@ class HomeScreenState extends State<HomeScreen>
       ),
       secondaryBackground: Container(
         decoration: BoxDecoration(
-          color: Colors.red.withAlpha(50),
+          color: AppColors.error.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(20),
         ),
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 20),
-        child: const Icon(Icons.delete, color: Colors.red),
+        child: const Icon(Icons.delete, color: AppColors.error),
       ),
       child: AnimatedBuilder(
         animation: _fadeAnimation,
@@ -500,8 +600,8 @@ class HomeScreenState extends State<HomeScreen>
               padding:
                   const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
               child: Card(
-                elevation: 4,
-                shadowColor: Colors.black.withAlpha(39),
+                elevation: 8,
+                shadowColor: Colors.black.withValues(alpha: 0.2),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(20),
                 ),
@@ -512,25 +612,17 @@ class HomeScreenState extends State<HomeScreen>
                       begin: Alignment.topLeft,
                       end: Alignment.bottomRight,
                       colors: [
-                        AppColors.background.withAlpha(243),
-                        AppColors.background.withAlpha(217),
+                        AppColors.background.withValues(alpha: 0.95),
+                        AppColors.background.withValues(alpha: 0.85),
                       ],
                     ),
                     borderRadius: BorderRadius.circular(20),
-                    boxShadow: [
-                      BoxShadow(
-                        color: Colors.black.withAlpha(13),
-                        blurRadius: 8,
-                        offset: const Offset(0, 2),
-                        spreadRadius: 1,
-                      ),
-                    ],
                   ),
                   child: InkWell(
                     borderRadius: BorderRadius.circular(20),
-                    splashColor: AppColors.primary.withAlpha(52),
-                    highlightColor: AppColors.primary.withAlpha(26),
-                    onTap: () => _navigateToScheduleDetails(schedule.id),
+                    splashColor: AppColors.primary.withValues(alpha: 0.2),
+                    highlightColor: AppColors.primary.withValues(alpha: 0.1),
+                    onTap: () => _authenticateAndNavigate(schedule.id),
                     child: Padding(
                       padding: const EdgeInsets.all(16.0),
                       child: Column(
@@ -542,7 +634,8 @@ class HomeScreenState extends State<HomeScreen>
                               Container(
                                 padding: const EdgeInsets.all(8.0),
                                 decoration: BoxDecoration(
-                                  color: AppColors.primary.withAlpha(26),
+                                  color:
+                                      AppColors.primary.withValues(alpha: 0.1),
                                   borderRadius: BorderRadius.circular(12),
                                 ),
                                 child: Icon(
@@ -574,10 +667,10 @@ class HomeScreenState extends State<HomeScreen>
                                         if (isOwner)
                                           Container(
                                             padding: const EdgeInsets.symmetric(
-                                                horizontal: 8, vertical: 2),
+                                                horizontal: 8, vertical: 4),
                                             decoration: BoxDecoration(
                                               color: AppColors.primary
-                                                  .withAlpha(30),
+                                                  .withValues(alpha: 0.2),
                                               borderRadius:
                                                   BorderRadius.circular(12),
                                             ),
@@ -592,18 +685,20 @@ class HomeScreenState extends State<HomeScreen>
                                           ),
                                       ],
                                     ),
-                                    const SizedBox(height: 4),
+                                    const SizedBox(height: 8),
                                     Row(
                                       children: [
                                         Container(
                                           padding: const EdgeInsets.symmetric(
-                                              horizontal: 8, vertical: 2),
+                                              horizontal: 8, vertical: 4),
                                           decoration: BoxDecoration(
-                                            color: statusColor.withAlpha(30),
+                                            color: statusColor.withValues(
+                                                alpha: 0.2),
                                             borderRadius:
                                                 BorderRadius.circular(12),
                                             border: Border.all(
-                                              color: statusColor.withAlpha(78),
+                                              color: statusColor.withValues(
+                                                  alpha: 0.5),
                                               width: 1,
                                             ),
                                           ),
@@ -616,6 +711,14 @@ class HomeScreenState extends State<HomeScreen>
                                               fontSize: isLargeScreen ? 13 : 12,
                                               fontWeight: FontWeight.w600,
                                             ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          'Created: ${DateFormat('dd-MM-yy').format(schedule.createdAt)}',
+                                          style: TextStyle(
+                                            fontSize: isLargeScreen ? 13 : 12,
+                                            color: AppColors.textSecondary,
                                           ),
                                         ),
                                       ],
@@ -634,7 +737,8 @@ class HomeScreenState extends State<HomeScreen>
                                 schedule.description!,
                                 style: TextStyle(
                                   fontSize: isLargeScreen ? 15 : 14,
-                                  color: AppColors.textSecondary.withAlpha(204),
+                                  color: AppColors.textSecondary
+                                      .withValues(alpha: 0.8),
                                 ),
                                 maxLines: 2,
                                 overflow: TextOverflow.ellipsis,
@@ -660,14 +764,17 @@ class HomeScreenState extends State<HomeScreen>
                               const SizedBox(width: 8),
                               ElevatedButton.icon(
                                 onPressed: () =>
-                                    _navigateToScheduleDetails(schedule.id),
-                                icon: const Icon(Icons.visibility, size: 18),
+                                    _authenticateAndNavigate(schedule.id),
+                                icon: const Icon(Icons.fingerprint, size: 18),
                                 label: const Text('View'),
                                 style: ElevatedButton.styleFrom(
-                                  backgroundColor: AppColors.primary,
+                                  backgroundColor: AppColors.secondary,
                                   foregroundColor: AppColors.textOnPrimary,
                                   padding: const EdgeInsets.symmetric(
                                       horizontal: 16, vertical: 8),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(12),
+                                  ),
                                 ),
                               ),
                             ],
@@ -692,8 +799,8 @@ class HomeScreenState extends State<HomeScreen>
         children: [
           TweenAnimationBuilder(
             tween: Tween<double>(begin: 0.95, end: 1.0),
-            duration: const Duration(milliseconds: 1000),
-            curve: Curves.easeInOut,
+            duration: const Duration(milliseconds: 1200),
+            curve: Curves.elasticOut,
             builder: (context, scale, child) {
               return Transform.scale(
                 scale: scale,
@@ -713,7 +820,7 @@ class HomeScreenState extends State<HomeScreen>
             style: TextStyle(
               fontSize: 22,
               fontWeight: FontWeight.bold,
-              color: AppColors.warning.withAlpha(230),
+              color: Colors.purple,
             ),
           ),
           const SizedBox(height: 16),
@@ -721,7 +828,7 @@ class HomeScreenState extends State<HomeScreen>
             'Create your first schedule to get started',
             style: TextStyle(
               fontSize: 16,
-              color: AppColors.textSecondary.withAlpha(204),
+              color: Colors.purple,
             ),
             textAlign: TextAlign.center,
           ),

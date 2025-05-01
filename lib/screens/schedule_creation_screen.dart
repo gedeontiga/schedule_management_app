@@ -56,107 +56,68 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
   @override
   void initState() {
     super.initState();
-
-    // Initialize selectedDays here
     _selectedDays = List.filled(7, false);
-
-    // Debug log to confirm initState is called
-    debugPrint(
-        'initState called: ${widget.schedule != null ? 'Edit Mode' : 'Create Mode'}');
-
     _isEditMode = widget.schedule != null;
-
     if (_isEditMode && widget.schedule != null) {
-      // Added null check
-      debugPrint(
-          'Editing schedule: id=${widget.schedule!.id}, name=${widget.schedule!.name}');
-
-      // Set controllers with schedule data
       _nameController.text = widget.schedule!.name;
       _descriptionController.text = widget.schedule!.description ?? '';
-
-      // Set duration
       _selectedDuration = _durations.contains(widget.schedule!.duration)
           ? widget.schedule!.duration
           : _durations.first;
-      debugPrint('Selected duration: $_selectedDuration');
-
-      // Set selected days
       for (int i = 0; i < _days.length; i++) {
         _selectedDays[i] = widget.schedule!.availableDays.contains(_days[i]);
       }
-      debugPrint('Selected days: $_selectedDays');
-
-      // Load participants
       if (widget.schedule!.participants.isNotEmpty) {
         _participants = List.from(widget.schedule!.participants);
-        debugPrint('Participants loaded: ${_participants.length}');
-
-        // Load usernames for participants
         _loadUsernames();
       }
     } else {
       _selectedDuration = _durations.first;
-      debugPrint('Creating new schedule');
     }
   }
 
-  // Separate method to load usernames for better organization
   Future<void> _loadUsernames() async {
     for (var participant in _participants) {
-      _usernameCache[participant.userId] = participant.userId; // Default value
+      _usernameCache[participant.userId] = participant.userId;
     }
-
     try {
-      // Load all usernames in parallel
       await Future.wait(_participants.map((participant) async {
         final username = await _findUsername(participant.userId);
         if (username != null) {
           _usernameCache[participant.userId] = username;
         }
       }));
-
-      // Update UI after loading usernames
       if (mounted) {
-        setState(() {
-          debugPrint('Usernames loaded successfully');
-        });
+        setState(() {});
       }
     } catch (e) {
-      debugPrint('Error loading usernames: $e');
+      // ignore
     }
   }
 
   Future<String?> _findUserId(String input) async {
     final normalizedInput = input.trim().toLowerCase();
-    debugPrint('Searching for user with input: "$normalizedInput"');
-
     try {
       final response = await SupabaseManager.client
           .from('user_profiles')
           .select('id, email')
           .eq('email', normalizedInput)
           .single();
-      debugPrint('Found user: $response');
       return response['id'];
     } catch (e) {
-      debugPrint('Error finding user: $e');
       return null;
     }
   }
 
   Future<String?> _findUsername(String userId) async {
-    debugPrint('Finding username for userId: $userId');
     try {
       final response = await SupabaseManager.client
           .from('user_details')
           .select('id, username')
           .eq('id', userId)
           .single();
-      debugPrint('Found username: ${response['username']}');
       return response['username'];
     } catch (e) {
-      debugPrint('Error finding username: $e');
       return null;
     }
   }
@@ -164,16 +125,13 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
   void _addRoleToParticipant() {
     final input = _participantController.text.trim();
     final roleName = _roleController.text.trim();
-
     if (input.isEmpty || roleName.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please enter both email and role')),
       );
       return;
     }
-
     setState(() => _isLoading = true);
-
     _findUserId(input).then((userId) {
       if (userId != null) {
         _findUsername(userId).then((username) {
@@ -183,7 +141,6 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
             });
           }
         });
-
         setState(() {
           var participant = _participants.firstWhere(
             (p) => p.userId == userId,
@@ -194,25 +151,20 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
               freeDays: [],
             ),
           );
-
           if (!_participants.contains(participant)) {
             _participants.add(participant);
           }
-
           final role = Role(name: roleName);
           participant.roles.add(role);
-
           _participantController.clear();
           _roleController.clear();
           _isLoading = false;
-
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Participant added successfully')),
           );
         });
       } else {
         setState(() => _isLoading = false);
-
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('User not found with email: $input')),
@@ -221,8 +173,6 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
       }
     }).catchError((error) {
       setState(() => _isLoading = false);
-      debugPrint('Error adding participant: $error');
-
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error adding participant: $error')),
@@ -233,18 +183,13 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
 
   Future<void> _saveSchedule() async {
     if (!_formKey.currentState!.validate()) return;
-
     if (_selectedDays.every((selected) => !selected)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please select at least one day')),
       );
       return;
     }
-
-    setState(() {
-      _isLoading = true;
-    });
-
+    setState(() => _isLoading = true);
     try {
       final selectedDays = _days
           .asMap()
@@ -252,17 +197,23 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
           .where((entry) => _selectedDays[entry.key])
           .map((entry) => entry.value)
           .toList();
-
       final scheduleId = _isEditMode ? widget.schedule!.id : const Uuid().v4();
 
-      final updatedParticipants = _participants
-          .map((p) => Participant(
-                userId: p.userId,
-                scheduleId: scheduleId,
-                roles: p.roles,
-                freeDays: p.freeDays,
-              ))
-          .toList();
+      // Preserve existing free days for participants
+      final updatedParticipants = _participants.map((p) {
+        final existingParticipant = _isEditMode
+            ? widget.schedule!.participants.firstWhere(
+                (ep) => ep.userId == p.userId,
+                orElse: () => p,
+              )
+            : p;
+        return Participant(
+          userId: p.userId,
+          scheduleId: scheduleId,
+          roles: p.roles,
+          freeDays: existingParticipant.freeDays,
+        );
+      }).toList();
 
       if (!_isEditMode) {
         updatedParticipants.add(Participant(
@@ -283,19 +234,16 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
         duration: _selectedDuration!,
         ownerId: SupabaseManager.getCurrentUserId()!,
         participants: updatedParticipants,
-        isFullySet: false,
+        isFullySet: _isEditMode ? widget.schedule!.isFullySet : false,
+        createdAt: _isEditMode ? widget.schedule!.createdAt : DateTime.now(),
       );
 
       if (_isEditMode) {
-        debugPrint('Updating schedule: ${schedule.id}');
         await _scheduleService.updateSchedule(schedule);
         await _scheduleService.syncParticipants(
             scheduleId, updatedParticipants);
       } else {
-        debugPrint('Creating new schedule: ${schedule.id}');
         await _scheduleService.createSchedule(schedule);
-
-        // Send invitations
         for (var participant in updatedParticipants) {
           if (participant.userId != SupabaseManager.getCurrentUserId()) {
             try {
@@ -305,14 +253,12 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
                 participant.roles.map((r) => r.name).join(', '),
               );
             } catch (e) {
-              debugPrint(
-                  'Failed to send invitation to ${participant.userId}: $e');
-
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
                     content: Text(
-                        'Schedule created, but failed to send invitation to ${_usernameCache[participant.userId] ?? participant.userId}'),
+                      'Schedule created, but failed to send invitation to ${_usernameCache[participant.userId] ?? participant.userId}',
+                    ),
                   ),
                 );
               }
@@ -320,9 +266,8 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
           }
         }
       }
-
       if (mounted) {
-        Navigator.pop(context, true); // Return true to indicate success
+        Navigator.pop(context, true);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(_isEditMode
@@ -332,8 +277,6 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
         );
       }
     } catch (e) {
-      debugPrint('Error saving schedule: $e');
-
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: $e')),
@@ -341,9 +284,7 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
       }
     } finally {
       if (mounted) {
-        setState(() {
-          _isLoading = false;
-        });
+        setState(() => _isLoading = false);
       }
     }
   }
@@ -362,7 +303,7 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(_isEditMode ? 'Edit Schedule' : 'Create Schedule'),
-        backgroundColor: AppColors.primary,
+        backgroundColor: AppColors.secondary,
         foregroundColor: AppColors.textOnPrimary,
         elevation: 0,
       ),
@@ -374,7 +315,7 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
             end: Alignment.bottomCenter,
             colors: [
               AppColors.primary.withAlpha(26),
-              AppColors.background,
+              AppColors.secondary.withAlpha(26),
             ],
           ),
         ),

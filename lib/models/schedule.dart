@@ -10,6 +10,7 @@ class Schedule {
   final String ownerId;
   final List<Participant> participants;
   final bool isFullySet;
+  final DateTime createdAt;
 
   Schedule({
     required this.id,
@@ -20,6 +21,7 @@ class Schedule {
     required this.ownerId,
     required this.participants,
     required this.isFullySet,
+    required this.createdAt,
   });
 
   Map<String, dynamic> toJson() {
@@ -27,10 +29,8 @@ class Schedule {
     try {
       jsonEncode(participantsJson);
     } catch (e) {
-      // print('Invalid JSON for participants: $e');
       throw Exception('Failed to serialize participants to JSON');
     }
-
     return {
       'id': id,
       'name': name,
@@ -40,7 +40,32 @@ class Schedule {
       'owner_id': ownerId,
       'participants': participantsJson,
       'is_fully_set': isFullySet,
+      'created_at': createdAt.toIso8601String(),
     };
+  }
+
+  Schedule copyWith({
+    String? id,
+    String? name,
+    String? description,
+    String? ownerId,
+    List<String>? availableDays,
+    String? duration,
+    List<Participant>? participants,
+    bool? isFullySet,
+    DateTime? createdAt,
+  }) {
+    return Schedule(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      description: description ?? this.description,
+      ownerId: ownerId ?? this.ownerId,
+      availableDays: availableDays ?? this.availableDays,
+      duration: duration ?? this.duration,
+      participants: participants ?? this.participants,
+      isFullySet: isFullySet ?? this.isFullySet,
+      createdAt: createdAt ?? this.createdAt,
+    );
   }
 
   factory Schedule.fromJson(Map<String, dynamic> json) => Schedule(
@@ -54,5 +79,6 @@ class Schedule {
             .map((p) => Participant.fromJson(p as Map<String, dynamic>))
             .toList(),
         isFullySet: json['is_fully_set'],
+        createdAt: DateTime.parse(json['created_at']),
       );
 }

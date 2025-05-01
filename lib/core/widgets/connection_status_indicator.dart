@@ -64,4 +64,9 @@ class ConnectionStatusIndicatorState extends State<ConnectionStatusIndicator> {
       ),
     );
   }
+
+  @override
+  void dispose() {
+    super.dispose();
+  }
 }

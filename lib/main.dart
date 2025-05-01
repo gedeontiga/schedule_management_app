@@ -11,10 +11,7 @@ import 'screens/login_screen.dart';
 import 'screens/registration_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/schedule_creation_screen.dart';
-// import 'screens/schedule_edit_screen.dart';
 import 'screens/schedule_management_screen.dart';
-import 'screens/permutation_request_screen.dart';
-import 'screens/biometric_auth_screen.dart';
 
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
@@ -82,17 +79,6 @@ class MyApp extends StatelessWidget {
         '/home': (context) => const HomeScreen(),
         '/create-schedule': (context) => const ScheduleCreationScreen(),
         '/manage-schedule': (context) => const ScheduleManagementScreen(),
-        '/permutation-request': (context) => const PermutationRequestScreen(),
-        '/biometric-auth': (context) {
-          final scheduleId =
-              ModalRoute.of(context)?.settings.arguments as String?;
-          if (scheduleId == null) {
-            return const Scaffold(
-              body: Center(child: Text('Error: Schedule ID not provided')),
-            );
-          }
-          return BiometricAuthScreen(scheduleId: scheduleId);
-        },
       },
     );
   }

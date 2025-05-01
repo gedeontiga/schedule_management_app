@@ -115,7 +115,7 @@ class LoginScreenState extends State<LoginScreen>
       } catch (e) {
         if (mounted) {
           setState(() {
-            _errorMessage = 'An unexpected error occurred';
+            _errorMessage = 'Invalid email or password';
           });
         }
       } finally {

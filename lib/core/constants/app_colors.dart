@@ -7,8 +7,6 @@ class AppColors {
 
   static const Color available = Color(0xFF4CAF50);
   static const Color unavailable = Color(0xFFE53935);
-  static const Color moderationRole = Color(0xFF8E24AA);
-  static const Color preachingRole = Color(0xFF00ACC1);
 
   static const Color background = Color(0xFFF5F5F5);
   static const Color surface = Colors.white;

@@ -12,11 +12,10 @@ class DbManagerService {
 
       _localDb = await openDatabase(
         path,
-        version: 1,
+        version: 2, // Increment version for schema migration
         onCreate: (db, version) async {
           const localSchemas = [
-            '''
-            CREATE TABLE IF NOT EXISTS schedules (
+            '''CREATE TABLE IF NOT EXISTS schedules (
               id TEXT PRIMARY KEY,
               name TEXT NOT NULL,
               description TEXT,
@@ -24,29 +23,24 @@ class DbManagerService {
               duration TEXT NOT NULL,
               owner_id TEXT,
               participants TEXT,
-              is_fully_set INTEGER DEFAULT 0
-            );
-            ''',
-            '''
-            CREATE TABLE IF NOT EXISTS participants (
+              is_fully_set INTEGER DEFAULT 0,
+              created_at TEXT DEFAULT (datetime('now'))
+            );''',
+            '''CREATE TABLE IF NOT EXISTS participants (
               id TEXT PRIMARY KEY,
               schedule_id TEXT,
               user_id TEXT,
               roles TEXT,
-              free_days TEXT
-            );
-            ''',
-            '''
-            CREATE TABLE IF NOT EXISTS notifications (
+              free_days TEXT DEFAULT '[]' -- Store as JSON string
+            );''',
+            '''CREATE TABLE IF NOT EXISTS notifications (
               id TEXT PRIMARY KEY,
               user_id TEXT,
               type TEXT NOT NULL,
               data TEXT,
               created_at TEXT DEFAULT (datetime('now'))
-            );
-            ''',
-            '''
-            CREATE TABLE IF NOT EXISTS permutation_requests (
+            );''',
+            '''CREATE TABLE IF NOT EXISTS permutation_requests (
               id TEXT PRIMARY KEY,
               sender_id TEXT,
               receiver_id TEXT,
@@ -54,24 +48,31 @@ class DbManagerService {
               sender_day TEXT,
               receiver_day TEXT,
               status TEXT DEFAULT 'pending'
-            );
-            ''',
+            );''',
           ];
 
           for (var schema in localSchemas) {
             await db.execute(schema);
           }
         },
+        onUpgrade: (db, oldVersion, newVersion) async {
+          if (oldVersion < 2) {
+            // Migration for version 2: Add created_at to schedules and update free_days default
+            await db.execute(
+                'ALTER TABLE schedules ADD COLUMN created_at TEXT DEFAULT (datetime("now"));');
+            await db.execute(
+                'ALTER TABLE participants ADD COLUMN free_days TEXT DEFAULT "[]";');
+          }
+        },
       );
     } catch (e) {
-      // print('Failed to initialize local SQLite database: $e');
       _localDb = null;
+      throw Exception('Failed to initialize local database: $e');
     }
   }
 
   Future<void> initializeDatabases({bool isLocalOnly = false}) async {
     await initializeLocalDatabase();
-    // Remote database initialization is handled manually via Supabase Dashboard
   }
 
   Database get localDatabase {

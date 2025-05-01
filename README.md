@@ -129,8 +129,6 @@ lib/
 │   ├── home_screen.dart                # Displays schedules
 │   ├── schedule_creation_screen.dart   # Create/edit schedules
 │   ├── schedule_management_screen.dart # Manage free days
-│   ├── permutation_request_screen.dart # Handle permutation requests
-│   └── biometric_auth_screen.dart      # Biometric authentication
 └── main.dart
 ```
 
