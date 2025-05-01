@@ -306,7 +306,7 @@ class LoginScreenState extends State<LoginScreen>
                                           borderRadius:
                                               BorderRadius.circular(60),
                                           child: Image.asset(
-                                            'assets/images/schedule_app_logo.png',
+                                            'assets/schedule_app_logo.png',
                                             fit: BoxFit.contain,
                                             errorBuilder:
                                                 (context, error, stackTrace) {

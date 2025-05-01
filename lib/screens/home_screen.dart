@@ -394,8 +394,7 @@ class HomeScreenState extends State<HomeScreen>
           ),
           CircleAvatar(
             radius: isLargeScreen ? 32 : 24,
-            backgroundImage:
-                const AssetImage('assets/images/schedule_app_logo.png'),
+            backgroundImage: const AssetImage('assets/schedule_app_logo.png'),
             backgroundColor: AppColors.primary.withValues(alpha: 0.2),
           ),
         ],
@@ -808,7 +807,7 @@ class HomeScreenState extends State<HomeScreen>
               );
             },
             child: Image.asset(
-              'assets/images/schedule_app_logo.png',
+              'assets/schedule_app_logo.png',
               width: 120,
               height: 120,
               opacity: const AlwaysStoppedAnimation(0.8),

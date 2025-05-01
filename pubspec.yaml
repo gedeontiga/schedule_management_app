@@ -46,7 +46,7 @@ flutter:
 
   uses-material-design: true
   assets:
-    - assets/images/schedule_app_logo.png
+    - assets/schedule_app_logo.png
 
 flutter_launcher_icons:
   android: true
@@ -55,12 +55,12 @@ flutter_launcher_icons:
   linux: true
   windows:
     generate: true
-    image_path: "assets/images/schedule_app_logo.png"
+    image_path: "assets/schedule_app_logo.png"
   web:
     generate: true
-    image_path: "assets/images/schedule_app_logo.png"
+    image_path: "assets/schedule_app_logo.png"
     background_color: "#3366C2"
     theme_color: "#3366C2"
-  image_path: "assets/images/schedule_app_logo.png"
+  image_path: "assets/schedule_app_logo.png"
   adaptive_icon_background: "#3366C2"
-  adaptive_icon_foreground: "assets/images/schedule_app_logo.png"
+  adaptive_icon_foreground: "assets/schedule_app_logo.png"
