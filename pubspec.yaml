@@ -11,7 +11,6 @@ dependencies:
   flutter:
     sdk: flutter
 
-  cupertino_icons: ^1.0.8
   hive: ^2.2.3
   intl: ^0.20.2
   connectivity_plus: ^6.1.3
@@ -34,6 +33,9 @@ dependencies:
   permission_handler: ^12.0.0+1
   device_info_plus: ^9.1.2
   open_file: ^3.3.2
+  google_fonts: ^6.2.1
+  flutter_dotenv: ^5.0.0
+  table_calendar: ^3.0.8
 
 dev_dependencies:
   flutter_test:
@@ -46,6 +48,7 @@ flutter:
 
   uses-material-design: true
   assets:
+    - .env.v2
     - assets/schedule_app_logo.png
 
 flutter_launcher_icons:

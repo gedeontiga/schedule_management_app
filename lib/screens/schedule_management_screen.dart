@@ -12,11 +12,14 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
 import '../core/constants/app_colors.dart';
 import '../core/services/permission_service.dart';
+import '../core/widgets/calendar_view.dart';
+import '../models/time_slot.dart';
 import '../core/widgets/gradient_button.dart';
 import '../core/services/schedule_service.dart';
 import '../core/services/notification_service.dart';
 import '../core/services/pdf_service.dart';
 import '../core/widgets/info_tile.dart';
+import '../models/available_day.dart';
 import '../models/free_day.dart';
 import '../models/participant.dart';
 import '../models/schedule.dart';
@@ -42,15 +45,22 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
   bool _isLoading = false;
   final Map<String, String> _alarms = {};
   bool _hasFetchedSchedule = false;
+  bool _showCalendarView = false;
   List<Participant> _participants = [];
   late StreamSubscription<List<Participant>> _participantSubscription;
-  String? _scheduleId; // Store scheduleId temporarily
+  String? _scheduleId;
+  TimeOfDay? _selectedStartTime;
+  TimeOfDay? _selectedEndTime;
+  List<List<FreeDay>> _availableWeeklyDays = [];
+  Map<String, List<TimeSlot>> _availableTimeSlots = {};
+  List<Map<String, dynamic>> _pendingPermutationRequests = [];
+  bool _showPermutationRequestPopup = false;
+  Map<String, dynamic>? _currentPermutationRequest;
 
   @override
   void initState() {
     super.initState();
 
-    // Initialize with correct types
     _participantSubscription = Stream<List<Participant>>.empty().listen((_) {});
     _scheduleSubscription = Stream<Schedule>.empty().listen((_) {});
 
@@ -58,6 +68,13 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
       if (payload['eventType'] == 'UPDATE' &&
           payload['new']['status'] == 'accepted') {
         await _fetchSchedule();
+      }
+
+      // Add this new condition
+      if (payload['eventType'] == 'INSERT' &&
+          payload['new']['receiver_id'] == SupabaseManager.getCurrentUserId() &&
+          payload['new']['schedule_id'] == _scheduleId) {
+        await _fetchPendingPermutationRequests();
       }
     });
 
@@ -71,6 +88,12 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
           payload['data']['schedule_id'] == _scheduleId) {
         _fetchSchedule();
       }
+
+      // Add this new condition
+      if (payload['type'] == 'permutation_request' &&
+          payload['data']['schedule_id'] == _scheduleId) {
+        _fetchPendingPermutationRequests();
+      }
     });
   }
 
@@ -79,7 +102,7 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
     super.didChangeDependencies();
     if (!_hasFetchedSchedule) {
       _hasFetchedSchedule = true;
-      // Access ModalRoute here instead of initState
+
       _scheduleId = ModalRoute.of(context)!.settings.arguments as String;
       _fetchSchedule();
     }
@@ -145,6 +168,243 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
       }
     } finally {
       setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _handlePermutationResponse(String status) async {
+    if (_currentPermutationRequest == null) return;
+
+    setState(() => _isLoading = true);
+    try {
+      final requestId = _currentPermutationRequest!['id'];
+      final scheduleId = _currentPermutationRequest!['schedule_id'];
+      final senderId = _currentPermutationRequest!['sender_id'];
+      final receiverId = _currentPermutationRequest!['receiver_id'];
+
+      await _notificationService.updatePermutationRequestStatus(
+        requestId,
+        status,
+        scheduleId,
+        senderId,
+        receiverId,
+      );
+
+      // If accepted, we need to swap the free days
+      if (status == 'accepted') {
+        final senderDay = _currentPermutationRequest!['sender_day'];
+        final receiverDay = _currentPermutationRequest!['receiver_day'];
+
+        // Parse the days from format 'day_yyyy-MM-dd'
+        final senderDayParts = senderDay.split('_');
+        final receiverDayParts = receiverDay.split('_');
+
+        final senderDayName = senderDayParts[0];
+        final senderDayDate = DateTime.parse(senderDayParts[1]);
+
+        final receiverDayName = receiverDayParts[0];
+        final receiverDayDate = DateTime.parse(receiverDayParts[1]);
+
+        // Get current free days for both participants
+        final currentUser = _participants.firstWhere(
+          (p) => p.userId == SupabaseManager.getCurrentUserId()!,
+        );
+
+        final requester = _participants.firstWhere(
+          (p) => p.userId == senderId,
+        );
+
+        // Find the specific free days to swap
+        final myDayToGive = currentUser.freeDays.firstWhere(
+          (d) =>
+              d.day == receiverDayName &&
+              d.date.year == receiverDayDate.year &&
+              d.date.month == receiverDayDate.month &&
+              d.date.day == receiverDayDate.day,
+        );
+
+        final theirDayToGive = requester.freeDays.firstWhere(
+          (d) =>
+              d.day == senderDayName &&
+              d.date.year == senderDayDate.year &&
+              d.date.month == senderDayDate.month &&
+              d.date.day == senderDayDate.day,
+        );
+
+        // Create new free days lists for both users
+        final myNewFreeDays = currentUser.freeDays
+            .where((d) => d.date != myDayToGive.date)
+            .toList()
+          ..add(theirDayToGive);
+
+        final theirNewFreeDays = requester.freeDays
+            .where((d) => d.date != theirDayToGive.date)
+            .toList()
+          ..add(myDayToGive);
+
+        // Update both users' free days
+        await _scheduleService.updateFreeDays(
+          scheduleId,
+          SupabaseManager.getCurrentUserId()!,
+          myNewFreeDays,
+        );
+
+        await _scheduleService.updateFreeDays(
+          scheduleId,
+          senderId,
+          theirNewFreeDays,
+        );
+      }
+
+      setState(() {
+        _showPermutationRequestPopup = false;
+        _currentPermutationRequest = null;
+        _fetchPendingPermutationRequests();
+      });
+
+      _fetchSchedule();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  void _showPermutationRequestDialog() {
+    if (_currentPermutationRequest == null) return;
+
+    showDialog(
+      context: context,
+      barrierDismissible: true, // Make it dismissible
+      builder: (context) => AlertDialog(
+        title: Text('Permutation Request'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Someone wants to swap days with you:',
+              style: TextStyle(fontWeight: FontWeight.w500),
+            ),
+            SizedBox(height: 12),
+            Row(
+              children: [
+                Expanded(
+                  child: Container(
+                    padding: EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withAlpha(50),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'They want your:',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        SizedBox(height: 8),
+                        Text(_currentPermutationRequest!['receiver_day'] ?? ''),
+                      ],
+                    ),
+                  ),
+                ),
+                SizedBox(width: 16),
+                Icon(Icons.swap_horiz, color: AppColors.primary),
+                SizedBox(width: 16),
+                Expanded(
+                  child: Container(
+                    padding: EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.secondary.withAlpha(50),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'They offer:',
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.textPrimary,
+                          ),
+                        ),
+                        SizedBox(height: 8),
+                        Text(_currentPermutationRequest!['sender_day'] ?? ''),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              // Don't change the status, just dismiss the dialog
+              setState(() {
+                _showPermutationRequestPopup = false;
+              });
+            },
+            child: Text('Later'),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _handlePermutationResponse('rejected');
+            },
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.red,
+            ),
+            child: Text('Reject'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              Navigator.of(context).pop();
+              _handlePermutationResponse('accepted');
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primary,
+            ),
+            child: Text('Accept'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _fetchPendingPermutationRequests() async {
+    try {
+      final userId = SupabaseManager.getCurrentUserId()!;
+      final requests = await _scheduleService.supabase
+          .from('permutation_requests')
+          .select()
+          .eq('receiver_id', userId)
+          .eq('schedule_id', _scheduleId!)
+          .eq('status', 'pending');
+
+      setState(() {
+        _pendingPermutationRequests = List<Map<String, dynamic>>.from(requests);
+        if (_pendingPermutationRequests.isNotEmpty &&
+            !_showPermutationRequestPopup) {
+          _currentPermutationRequest = _pendingPermutationRequests.first;
+          _showPermutationRequestPopup = true;
+          // Show the popup
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _showPermutationRequestDialog();
+          });
+        }
+      });
+    } catch (e) {
+      debugPrint('Error fetching permutation requests: $e');
     }
   }
 
@@ -247,7 +507,6 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
           final status = await permissionService.requestStoragePermission();
 
           if (status == PermissionStatus.permanentlyDenied && mounted) {
-            // Show a dialog explaining why we need permission and how to grant it
             await showDialog(
               context: context,
               builder: (context) => AlertDialog(
@@ -324,15 +583,12 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
     }
 
     final weeklyDays = <List<FreeDay>>[];
-
-    // Get days taken by other participants (excluding the current user)
     final otherParticipantsTakenDates = _participants
         .where((p) => p.userId != SupabaseManager.getCurrentUserId())
         .expand((p) => p.freeDays)
         .map((d) => DateTime(d.date.year, d.date.month, d.date.day))
         .toSet();
 
-    // Get days taken by current user
     final currentUserFreeDays = _participants
         .firstWhere(
           (p) => p.userId == SupabaseManager.getCurrentUserId(),
@@ -359,33 +615,501 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
         final dayName = daysOfWeek[date.weekday - 1];
         final normalizedDate = DateTime(date.year, date.month, date.day);
 
-        // Show all available days for the current user's schedule
-        if (_schedule!.availableDays.contains(dayName)) {
-          // For days the current user has already selected, show them so they can be unselected
+        if (_schedule!.availableDays
+            .any((availableDay) => availableDay.day == dayName)) {
+          final availableDay =
+              _schedule!.availableDays.firstWhere((d) => d.day == dayName);
+
+          // Check if the day has available time slots
+          final dateKey = DateFormat('yyyy-MM-dd').format(normalizedDate);
+          final hasAvailableSlots = _availableTimeSlots.containsKey(dateKey) &&
+              _availableTimeSlots[dateKey]!.isNotEmpty;
+
           if (currentUserTakenDates.contains(normalizedDate)) {
-            final existingDay = currentUserFreeDays.firstWhere((d) =>
-                d.date.year == normalizedDate.year &&
-                d.date.month == normalizedDate.month &&
-                d.date.day == normalizedDate.day);
+            final existingDay = currentUserFreeDays.firstWhere(
+              (d) =>
+                  d.date.year == normalizedDate.year &&
+                  d.date.month == normalizedDate.month &&
+                  d.date.day == normalizedDate.day,
+            );
             weekDays.add(existingDay);
-          }
-          // For days not taken by other participants, show them as available
-          else if (!otherParticipantsTakenDates.contains(normalizedDate)) {
+          } else if (!otherParticipantsTakenDates.contains(normalizedDate) ||
+              hasAvailableSlots) {
             weekDays.add(FreeDay(
               day: dayName,
               date: normalizedDate,
+              startTime: availableDay.startTime,
+              endTime: availableDay.endTime,
             ));
           }
         }
       }
 
-      weeklyDays.add(weekDays);
+      if (weekDays.isNotEmpty) {
+        weeklyDays.add(weekDays);
+      }
     }
 
     return weeklyDays;
   }
 
-// Fix for _fetchSchedule() method in ScheduleManagementScreenState class
+  void _calculateAvailableTimeSlots() {
+    if (_schedule == null) return;
+
+    _availableTimeSlots = {};
+
+    final allTakenSlots = <String, List<TimeSlot>>{};
+
+    for (var participant in _participants) {
+      for (var freeDay in participant.freeDays) {
+        final dateKey = DateFormat('yyyy-MM-dd').format(freeDay.date);
+
+        final timeSlot = TimeSlot(
+          startTime: freeDay.startTime,
+          endTime: freeDay.endTime,
+        );
+
+        if (allTakenSlots.containsKey(dateKey)) {
+          allTakenSlots[dateKey]!.add(timeSlot);
+        } else {
+          allTakenSlots[dateKey] = [timeSlot];
+        }
+      }
+    }
+
+    for (var weekDays in _availableWeeklyDays) {
+      for (var availableDay in weekDays) {
+        final dateKey = DateFormat('yyyy-MM-dd').format(availableDay.date);
+
+        final dayConstraint = _schedule!.availableDays.firstWhere(
+          (d) => d.day == availableDay.day,
+          orElse: () => AvailableDay(
+            day: availableDay.day,
+            startTime: '08:00',
+            endTime: '18:00',
+          ),
+        );
+
+        final fullDaySlot = TimeSlot(
+          startTime: dayConstraint.startTime,
+          endTime: dayConstraint.endTime,
+        );
+
+        List<TimeSlot> availableSlots = [fullDaySlot];
+
+        if (allTakenSlots.containsKey(dateKey)) {
+          final takenSlots = allTakenSlots[dateKey]!;
+
+          takenSlots.sort((a, b) => a.startMinutes.compareTo(b.startMinutes));
+
+          for (var takenSlot in takenSlots) {
+            List<TimeSlot> newAvailableSlots = [];
+
+            for (var availableSlot in availableSlots) {
+              if (availableSlot.endMinutes <= takenSlot.startMinutes ||
+                  availableSlot.startMinutes >= takenSlot.endMinutes) {
+                newAvailableSlots.add(availableSlot);
+                continue;
+              }
+
+              if (takenSlot.startMinutes <= availableSlot.startMinutes &&
+                  takenSlot.endMinutes >= availableSlot.endMinutes) {
+                continue;
+              }
+
+              if (takenSlot.startMinutes > availableSlot.startMinutes &&
+                  takenSlot.endMinutes < availableSlot.endMinutes) {
+                newAvailableSlots.add(TimeSlot(
+                  startTime: availableSlot.startTime,
+                  endTime: takenSlot.startTime,
+                ));
+
+                newAvailableSlots.add(TimeSlot(
+                  startTime: takenSlot.endTime,
+                  endTime: availableSlot.endTime,
+                ));
+                continue;
+              }
+
+              if (takenSlot.startMinutes <= availableSlot.startMinutes &&
+                  takenSlot.endMinutes > availableSlot.startMinutes) {
+                newAvailableSlots.add(TimeSlot(
+                  startTime: _minutesToTimeString(takenSlot.endMinutes),
+                  endTime: availableSlot.endTime,
+                ));
+                continue;
+              }
+
+              if (takenSlot.startMinutes < availableSlot.endMinutes &&
+                  takenSlot.endMinutes >= availableSlot.endMinutes) {
+                newAvailableSlots.add(TimeSlot(
+                  startTime: availableSlot.startTime,
+                  endTime: _minutesToTimeString(takenSlot.startMinutes),
+                ));
+                continue;
+              }
+            }
+
+            availableSlots = newAvailableSlots;
+          }
+        }
+
+        availableSlots = availableSlots
+            .where((slot) => slot.endMinutes - slot.startMinutes >= 30)
+            .toList();
+
+        if (availableSlots.isNotEmpty) {
+          _availableTimeSlots[dateKey] = availableSlots;
+        }
+      }
+    }
+  }
+
+  String _minutesToTimeString(int minutes) {
+    final hours = (minutes / 60).floor();
+    final mins = minutes % 60;
+    return '${hours.toString().padLeft(2, '0')}:${mins.toString().padLeft(2, '0')}';
+  }
+
+  Future<void> _selectSpecificHours(FreeDay day) async {
+    final dateKey = DateFormat('yyyy-MM-dd').format(day.date);
+    if (!_availableTimeSlots.containsKey(dateKey) ||
+        _availableTimeSlots[dateKey]!.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No available time slots for this day')),
+      );
+      return;
+    }
+
+    final availableDay = _schedule!.availableDays.firstWhere(
+      (d) => d.day == day.day,
+      orElse: () =>
+          AvailableDay(day: day.day, startTime: '08:00', endTime: '18:00'),
+    );
+
+    _selectedStartTime = null;
+    _selectedEndTime = null;
+
+    final result = await showDialog<Map<String, TimeOfDay>>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            backgroundColor: AppColors.surface.withValues(alpha: 0.95),
+            title: Text(
+              'Select Time for ${day.day} (${DateFormat('yyyy-MM-dd').format(day.date)})',
+            ),
+            content: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text('Available time slots:'),
+                ...(_availableTimeSlots[dateKey] ?? []).map(
+                  (slot) => ListTile(
+                    title: Text('${slot.startTime} - ${slot.endTime}'),
+                    onTap: () {
+                      final startParts = slot.startTime.split(':');
+                      final endParts = slot.endTime.split(':');
+                      setDialogState(() {
+                        _selectedStartTime = TimeOfDay(
+                          hour: int.parse(startParts[0]),
+                          minute: int.parse(startParts[1]),
+                        );
+                        _selectedEndTime = TimeOfDay(
+                          hour: int.parse(endParts[0]),
+                          minute: int.parse(endParts[1]),
+                        );
+                      });
+                    },
+                    selected: _selectedStartTime != null &&
+                        _selectedEndTime != null &&
+                        _selectedStartTime!.hour.toString().padLeft(2, '0') ==
+                            slot.startTime.split(':')[0] &&
+                        _selectedStartTime!.minute.toString().padLeft(2, '0') ==
+                            slot.startTime.split(':')[1] &&
+                        _selectedEndTime!.hour.toString().padLeft(2, '0') ==
+                            slot.endTime.split(':')[0] &&
+                        _selectedEndTime!.minute.toString().padLeft(2, '0') ==
+                            slot.endTime.split(':')[1],
+                  ),
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    Expanded(
+                      child: InkWell(
+                        onTap: () async {
+                          final picked = await showTimePicker(
+                            context: context,
+                            initialTime: _selectedStartTime ??
+                                TimeOfDay(
+                                  hour: int.parse(
+                                      availableDay.startTime.split(':')[0]),
+                                  minute: int.parse(
+                                      availableDay.startTime.split(':')[1]),
+                                ),
+                            builder: (context, child) {
+                              return MediaQuery(
+                                data: MediaQuery.of(context).copyWith(
+                                  alwaysUse24HourFormat: true,
+                                ),
+                                child: child!,
+                              );
+                            },
+                          );
+                          if (picked != null) {
+                            final pickedMinutes =
+                                picked.hour * 60 + picked.minute;
+                            final isValid = _availableTimeSlots[dateKey]!.any(
+                              (slot) =>
+                                  pickedMinutes >= slot.startMinutes &&
+                                  pickedMinutes < slot.endMinutes,
+                            );
+                            if (isValid) {
+                              setDialogState(() {
+                                _selectedStartTime = picked;
+                              });
+                            } else {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                        'Selected start time is not available'),
+                                  ),
+                                );
+                              }
+                            }
+                          }
+                        },
+                        child: InputDecorator(
+                          decoration: const InputDecoration(
+                            labelText: 'Start Time',
+                            border: OutlineInputBorder(),
+                          ),
+                          child: Text(
+                            _selectedStartTime != null
+                                ? '${_selectedStartTime!.hour.toString().padLeft(2, '0')}:${_selectedStartTime!.minute.toString().padLeft(2, '0')}'
+                                : 'Select',
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: InkWell(
+                        onTap: () async {
+                          final picked = await showTimePicker(
+                            context: context,
+                            initialTime: _selectedEndTime ??
+                                TimeOfDay(
+                                  hour: int.parse(
+                                      availableDay.endTime.split(':')[0]),
+                                  minute: int.parse(
+                                      availableDay.endTime.split(':')[1]),
+                                ),
+                            builder: (context, child) {
+                              return MediaQuery(
+                                data: MediaQuery.of(context).copyWith(
+                                  alwaysUse24HourFormat: true,
+                                ),
+                                child: child!,
+                              );
+                            },
+                          );
+                          if (picked != null) {
+                            final pickedMinutes =
+                                picked.hour * 60 + picked.minute;
+                            final isValid = _availableTimeSlots[dateKey]!.any(
+                              (slot) =>
+                                  pickedMinutes > slot.startMinutes &&
+                                  pickedMinutes <= slot.endMinutes,
+                            );
+                            if (isValid) {
+                              setDialogState(() {
+                                _selectedEndTime = picked;
+                              });
+                            } else {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(
+                                    content: Text(
+                                        'Selected end time is not available'),
+                                  ),
+                                );
+                              }
+                            }
+                          }
+                        },
+                        child: InputDecorator(
+                          decoration: const InputDecoration(
+                            labelText: 'End Time',
+                            border: OutlineInputBorder(),
+                          ),
+                          child: Text(
+                            _selectedEndTime != null
+                                ? '${_selectedEndTime!.hour.toString().padLeft(2, '0')}:${_selectedEndTime!.minute.toString().padLeft(2, '0')}'
+                                : 'Select',
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: const Text('CANCEL'),
+              ),
+              TextButton(
+                onPressed: () {
+                  if (_selectedStartTime == null || _selectedEndTime == null) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Please select both start and end time'),
+                      ),
+                    );
+                    return;
+                  }
+
+                  final startMinutes = _selectedStartTime!.hour * 60 +
+                      _selectedStartTime!.minute;
+                  final endMinutes =
+                      _selectedEndTime!.hour * 60 + _selectedEndTime!.minute;
+
+                  if (startMinutes >= endMinutes) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('End time must be after start time'),
+                      ),
+                    );
+                    return;
+                  }
+
+                  final selectedSlot = TimeSlot(
+                    startTime:
+                        '${_selectedStartTime!.hour.toString().padLeft(2, '0')}:${_selectedStartTime!.minute.toString().padLeft(2, '0')}',
+                    endTime:
+                        '${_selectedEndTime!.hour.toString().padLeft(2, '0')}:${_selectedEndTime!.minute.toString().padLeft(2, '0')}',
+                  );
+
+                  final isValidSelection = _availableTimeSlots[dateKey]!.any(
+                    (slot) =>
+                        selectedSlot.startMinutes >= slot.startMinutes &&
+                        selectedSlot.endMinutes <= slot.endMinutes,
+                  );
+
+                  if (!isValidSelection) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Selected time is not available'),
+                      ),
+                    );
+                    return;
+                  }
+
+                  Navigator.pop(context, {
+                    'startTime': _selectedStartTime!,
+                    'endTime': _selectedEndTime!,
+                  });
+                },
+                child: const Text('CONFIRM'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+
+    if (result != null) {
+      final selectedStartTime = result['startTime']!;
+      final selectedEndTime = result['endTime']!;
+
+      final startTimeStr =
+          '${selectedStartTime.hour.toString().padLeft(2, '0')}:${selectedStartTime.minute.toString().padLeft(2, '0')}';
+      final endTimeStr =
+          '${selectedEndTime.hour.toString().padLeft(2, '0')}:${selectedEndTime.minute.toString().padLeft(2, '0')}';
+
+      final updatedFreeDay = FreeDay(
+        day: day.day,
+        date: day.date,
+        startTime: startTimeStr,
+        endTime: endTimeStr,
+      );
+
+      setState(() {
+        final existingIndex = _freeDays.indexWhere((d) =>
+            d.date.year == day.date.year &&
+            d.date.month == day.date.month &&
+            d.date.day == day.date.day);
+        if (existingIndex >= 0) {
+          _freeDays[existingIndex] = updatedFreeDay;
+        } else {
+          _freeDays.add(updatedFreeDay);
+        }
+      });
+
+      try {
+        await _updateFreeDays();
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error updating free days: $e')),
+          );
+        }
+      }
+    }
+  }
+
+  Future<void> _selectAvailableDay(FreeDay day) async {
+    final action = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: AppColors.surface.withValues(alpha: 0.95),
+        title:
+            Text('${day.day} (${DateFormat('yyyy-MM-dd').format(day.date)})'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.access_time),
+              title: const Text('Select Specific Hours'),
+              onTap: () => Navigator.pop(context, 'select_hours'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.alarm),
+              title: const Text('Set Alarm'),
+              onTap: () => Navigator.pop(context, 'set_alarm'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('CANCEL'),
+          ),
+        ],
+      ),
+    );
+
+    if (action == 'select_hours') {
+      await _selectSpecificHours(day);
+    } else if (action == 'set_alarm') {
+      await _setAlarm(day);
+    }
+  }
+
+  Future<void> _removeFreeDay(FreeDay day) async {
+    setState(() {
+      _freeDays.removeWhere((d) =>
+          d.date.year == day.date.year &&
+          d.date.month == day.date.month &&
+          d.date.day == day.date.day);
+    });
+
+    await _updateFreeDays();
+  }
+
   Future<void> _fetchSchedule() async {
     setState(() => _isLoading = true);
     try {
@@ -422,7 +1146,6 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
           .listen((participants) {
         setState(() {
           _participants = participants;
-
           final currentUser = participants.firstWhere(
             (p) => p.userId == SupabaseManager.getCurrentUserId()!,
             orElse: () => Participant(
@@ -433,10 +1156,11 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
             ),
           );
           _freeDays = currentUser.freeDays;
-
           if (_schedule != null) {
             _schedule = _schedule!.copyWith(participants: participants);
           }
+          _availableWeeklyDays = _getWeeklyAvailableDays();
+          _calculateAvailableTimeSlots();
         });
       });
 
@@ -444,20 +1168,27 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
           _scheduleService.getScheduleStream(_scheduleId!).listen((schedule) {
         setState(() {
           _schedule = schedule;
+          _availableWeeklyDays = _getWeeklyAvailableDays();
+          _calculateAvailableTimeSlots();
         });
       });
 
-      // Listen for free days updates
       _scheduleService.notificationStream.listen((payload) {
         if (payload['type'] == 'free_days_updated' &&
             payload['data']['schedule_id'] == _scheduleId) {
-          // Force refresh of available days
-          setState(() {});
+          setState(() {
+            _availableWeeklyDays = _getWeeklyAvailableDays();
+            _calculateAvailableTimeSlots();
+          });
         }
       });
 
       final alarmBox = Hive.box('alarms');
       _alarms.addAll(alarmBox.toMap().cast<String, String>());
+
+      _availableWeeklyDays = _getWeeklyAvailableDays();
+      _calculateAvailableTimeSlots();
+      await _fetchPendingPermutationRequests();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -519,6 +1250,16 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
         ),
         actions: [
           IconButton(
+            icon:
+                Icon(Icons.calendar_view_month, color: AppColors.textOnPrimary),
+            tooltip: 'Toggle Calendar View',
+            onPressed: () {
+              setState(() {
+                _showCalendarView = !_showCalendarView;
+              });
+            },
+          ),
+          IconButton(
             icon: Icon(Icons.file_download, color: AppColors.textOnPrimary),
             tooltip: 'Export as PDF',
             onPressed: _schedule!.isFullySet ? _exportPdf : null,
@@ -544,8 +1285,53 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      if (_showCalendarView)
+                        Card(
+                          elevation: 8,
+                          shadowColor:
+                              AppColors.secondary.withValues(alpha: 0.5),
+                          shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(20)),
+                          color: Colors.white.withAlpha(243),
+                          child: Padding(
+                            padding: const EdgeInsets.all(20.0),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(Icons.calendar_view_month,
+                                        color: AppColors.primary, size: 28),
+                                    SizedBox(width: 12),
+                                    Text(
+                                      'Calendar View',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                        color: AppColors.textPrimary,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                SizedBox(height: 16),
+                                SizedBox(
+                                  height: 300,
+                                  child: CalendarView(
+                                    schedule: _schedule!,
+                                    freeDays: _freeDays,
+                                    participants: _participants,
+                                    onDaySelected: (day) =>
+                                        _selectAvailableDay(day),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      SizedBox(height: _showCalendarView ? 24 : 0),
                       Card(
                         elevation: 8,
+                        shadowColor: AppColors.secondary.withValues(alpha: 0.5),
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(20)),
                         color: Colors.white.withAlpha(243),
@@ -592,7 +1378,9 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                     : 'Select your available days for each week:',
                                 style: TextStyle(
                                   fontSize: 14,
-                                  color: AppColors.textSecondary,
+                                  color: _schedule!.isFullySet
+                                      ? AppColors.tertiary
+                                      : AppColors.textSecondary,
                                 ),
                               ),
                               SizedBox(height: 20),
@@ -622,20 +1410,23 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                             .any((d) => d.date == day.date);
                                         final hasAlarm = _alarms.containsKey(
                                             '${day.day}_${DateFormat('yyyy-MM-dd').format(day.date)}');
+
+                                        final selectedDay = isSelected
+                                            ? _freeDays.firstWhere(
+                                                (d) =>
+                                                    d.date.year ==
+                                                        day.date.year &&
+                                                    d.date.month ==
+                                                        day.date.month &&
+                                                    d.date.day == day.date.day,
+                                                orElse: () => day)
+                                            : day;
+
                                         return GestureDetector(
-                                          onTap: () {
-                                            setState(() {
-                                              if (isSelected) {
-                                                _freeDays.removeWhere(
-                                                    (d) => d.date == day.date);
-                                                _alarms.remove(
-                                                    '${day.day}_${DateFormat('yyyy-MM-dd').format(day.date)}');
-                                              } else {
-                                                _freeDays.add(day);
-                                                _setAlarm(day);
-                                              }
-                                            });
-                                          },
+                                          onTap: () => _selectAvailableDay(day),
+                                          onLongPress: isSelected
+                                              ? () => _removeFreeDay(day)
+                                              : null,
                                           child: AnimatedContainer(
                                             duration:
                                                 Duration(milliseconds: 300),
@@ -649,12 +1440,22 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                                   BorderRadius.circular(16),
                                               boxShadow: [
                                                 BoxShadow(
-                                                  color: Colors.black
-                                                      .withAlpha(26),
-                                                  blurRadius: 6,
-                                                  offset: Offset(0, 2),
+                                                  color: isSelected
+                                                      ? AppColors.primary
+                                                          .withAlpha(100)
+                                                      : Colors.black
+                                                          .withAlpha(26),
+                                                  blurRadius: 8,
+                                                  offset: Offset(0, 3),
+                                                  spreadRadius: 1,
                                                 ),
                                               ],
+                                              border: isSelected
+                                                  ? Border.all(
+                                                      color: AppColors.secondary
+                                                          .withAlpha(150),
+                                                      width: 2)
+                                                  : null,
                                             ),
                                             child: Stack(
                                               children: [
@@ -669,10 +1470,11 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                                             : AppColors
                                                                 .textPrimary,
                                                         fontWeight:
-                                                            FontWeight.w500,
+                                                            FontWeight.w600,
+                                                        fontSize: 15,
                                                       ),
                                                     ),
-                                                    SizedBox(height: 4),
+                                                    SizedBox(height: 6),
                                                     Text(
                                                       DateFormat('dd-MM-yy')
                                                           .format(day.date),
@@ -680,12 +1482,35 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                                         color: isSelected
                                                             ? AppColors
                                                                 .textOnPrimary
-                                                                .withAlpha(204)
+                                                                .withAlpha(220)
                                                             : AppColors
                                                                 .textSecondary,
                                                         fontSize: 12,
                                                       ),
                                                     ),
+                                                    if (isSelected)
+                                                      Padding(
+                                                        padding:
+                                                            const EdgeInsets
+                                                                .only(top: 6),
+                                                        child: Text(
+                                                          '${selectedDay.startTime} - ${selectedDay.endTime}',
+                                                          style: TextStyle(
+                                                            color: isSelected
+                                                                ? AppColors
+                                                                    .textOnPrimary
+                                                                    .withAlpha(
+                                                                        180)
+                                                                : AppColors
+                                                                    .textSecondary
+                                                                    .withAlpha(
+                                                                        180),
+                                                            fontSize: 10,
+                                                            fontWeight:
+                                                                FontWeight.w500,
+                                                          ),
+                                                        ),
+                                                      ),
                                                   ],
                                                 ),
                                                 if (hasAlarm)
@@ -693,11 +1518,14 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                                     right: 0,
                                                     top: 0,
                                                     child: Container(
-                                                      width: 10,
-                                                      height: 10,
+                                                      width: 12,
+                                                      height: 12,
                                                       decoration: BoxDecoration(
                                                         color: Colors.red,
                                                         shape: BoxShape.circle,
+                                                        border: Border.all(
+                                                            color: Colors.white,
+                                                            width: 1),
                                                       ),
                                                     ),
                                                   ),
@@ -998,6 +1826,116 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                 isLoading: _isLoading,
                                 icon: Icons.picture_as_pdf,
                                 enabled: _schedule!.isFullySet,
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      SizedBox(height: 24),
+                      Card(
+                        elevation: 8,
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20)),
+                        color: Colors.white.withAlpha(243),
+                        child: Padding(
+                          padding: const EdgeInsets.all(20.0),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Icon(Icons.people_outline,
+                                      color: AppColors.primary, size: 28),
+                                  SizedBox(width: 12),
+                                  Text(
+                                    'Participants Status',
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.textPrimary,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              SizedBox(height: 20),
+                              ListView.builder(
+                                shrinkWrap: true,
+                                physics: NeverScrollableScrollPhysics(),
+                                itemCount: _participants.length,
+                                itemBuilder: (context, index) {
+                                  final participant = _participants[index];
+                                  final isCurrentUser = participant.userId ==
+                                      SupabaseManager.getCurrentUserId();
+                                  final completionPercentage =
+                                      participant.freeDays.length /
+                                          (_schedule!.availableDays.length *
+                                              weeklyAvailableDays.length) *
+                                          100;
+
+                                  return Padding(
+                                    padding:
+                                        const EdgeInsets.only(bottom: 12.0),
+                                    child: Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Icon(
+                                              isCurrentUser
+                                                  ? Icons.person
+                                                  : Icons.person_outline,
+                                              color: isCurrentUser
+                                                  ? AppColors.primary
+                                                  : AppColors.textSecondary,
+                                              size: 20,
+                                            ),
+                                            SizedBox(width: 8),
+                                            Text(
+                                              isCurrentUser
+                                                  ? 'You'
+                                                  : 'Participant ${index + 1}',
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.w500,
+                                                color: isCurrentUser
+                                                    ? AppColors.primary
+                                                    : AppColors.textPrimary,
+                                              ),
+                                            ),
+                                            Spacer(),
+                                            Text(
+                                              '${completionPercentage.toStringAsFixed(0)}%',
+                                              style: TextStyle(
+                                                fontWeight: FontWeight.bold,
+                                                color:
+                                                    completionPercentage >= 100
+                                                        ? Colors.green
+                                                        : AppColors.secondary,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        SizedBox(height: 6),
+                                        ClipRRect(
+                                          borderRadius:
+                                              BorderRadius.circular(4),
+                                          child: LinearProgressIndicator(
+                                            value: completionPercentage / 100,
+                                            backgroundColor:
+                                                Colors.grey.shade200,
+                                            valueColor:
+                                                AlwaysStoppedAnimation<Color>(
+                                              completionPercentage >= 100
+                                                  ? Colors.green
+                                                  : AppColors.secondary,
+                                            ),
+                                            minHeight: 8,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
                               ),
                             ],
                           ),

@@ -357,46 +357,74 @@ class HomeScreenState extends State<HomeScreen>
   Widget _buildAppBar(bool isLargeScreen) {
     return Padding(
       padding: EdgeInsets.symmetric(
-        horizontal: isLargeScreen ? 32.0 : 16.0,
-        vertical: 24.0,
+        horizontal: isLargeScreen ? 24.0 : 16.0,
+        vertical: 12.0, // Reduced from 24.0
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Scheduling App',
-                style: TextStyle(
-                  fontSize: isLargeScreen ? 28 : 24,
-                  fontWeight: FontWeight.w900,
-                  color: AppColors.textOnPrimary,
-                  shadows: [
-                    BoxShadow(
-                      blurRadius: 6,
-                      color: AppColors.textSecondary.withValues(alpha: 0.8),
-                      offset: const Offset(2, 2),
+          // Using Row instead of Column for horizontal layout when space is tight
+          Expanded(
+            child: Row(
+              children: [
+                // App logo in smaller screens
+                if (!isLargeScreen)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 10.0),
+                    child: CircleAvatar(
+                      radius: 18, // Smaller radius
+                      backgroundImage:
+                          const AssetImage('assets/schedule_app_logo.png'),
+                      backgroundColor: AppColors.primary.withValues(alpha: 0.2),
                     ),
-                  ],
+                  ),
+
+                // Title and subtitle
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min, // Take minimum space
+                    children: [
+                      Text(
+                        'Scheduling App',
+                        style: TextStyle(
+                          fontSize:
+                              isLargeScreen ? 22 : 18, // Reduced from 28/24
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.textOnPrimary,
+                          shadows: [
+                            BoxShadow(
+                              blurRadius: 4, // Reduced from 6
+                              color: AppColors.textSecondary
+                                  .withValues(alpha: 0.6), // Less opacity
+                              offset: const Offset(1, 1), // Smaller offset
+                            ),
+                          ],
+                        ),
+                      ),
+                      Text(
+                        'Manage your schedules with ease',
+                        style: TextStyle(
+                          fontSize:
+                              isLargeScreen ? 14 : 12, // Reduced from 16/14
+                          color: AppColors.textOnPrimary,
+                          fontWeight: FontWeight.w400,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Manage your schedules with ease',
-                style: TextStyle(
-                  fontSize: isLargeScreen ? 16 : 14,
-                  color: AppColors.textOnPrimary,
-                  fontWeight: FontWeight.w400,
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
-          CircleAvatar(
-            radius: isLargeScreen ? 32 : 24,
-            backgroundImage: const AssetImage('assets/schedule_app_logo.png'),
-            backgroundColor: AppColors.primary.withValues(alpha: 0.2),
-          ),
+
+          // Only show logo on right side in large screens
+          if (isLargeScreen)
+            CircleAvatar(
+              radius: 24, // Reduced from 32
+              backgroundImage: const AssetImage('assets/schedule_app_logo.png'),
+              backgroundColor: AppColors.primary.withValues(alpha: 0.2),
+            ),
         ],
       ),
     );
@@ -414,7 +442,7 @@ class HomeScreenState extends State<HomeScreen>
           return Padding(
             padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 8.0),
             child: Container(
-              height: 160,
+              height: 120,
               decoration: BoxDecoration(
                 color: AppColors.background.withValues(alpha: 0.7),
                 borderRadius: BorderRadius.circular(20),
@@ -541,6 +569,7 @@ class HomeScreenState extends State<HomeScreen>
       key: Key(schedule.id),
       direction: isOwner ? DismissDirection.horizontal : DismissDirection.none,
       confirmDismiss: (direction) async {
+        // Dismissible code remains the same
         if (direction == DismissDirection.endToStart) {
           final shouldDelete = await showDialog(
             context: context,
@@ -575,7 +604,7 @@ class HomeScreenState extends State<HomeScreen>
       background: Container(
         decoration: BoxDecoration(
           color: AppColors.primary.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(16),
         ),
         alignment: Alignment.centerLeft,
         padding: const EdgeInsets.only(left: 20),
@@ -584,7 +613,7 @@ class HomeScreenState extends State<HomeScreen>
       secondaryBackground: Container(
         decoration: BoxDecoration(
           color: AppColors.error.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(20),
+          borderRadius: BorderRadius.circular(16),
         ),
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 20),
@@ -596,13 +625,13 @@ class HomeScreenState extends State<HomeScreen>
           return Transform.scale(
             scale: 0.95 + (_fadeAnimation.value * 0.05),
             child: Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 8.0, vertical: 4.0), // Reduced vertical padding
               child: Card(
-                elevation: 8,
-                shadowColor: Colors.black.withValues(alpha: 0.2),
+                elevation: 4, // Reduced elevation
+                shadowColor: Colors.black.withValues(alpha: 0.15),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(20),
+                  borderRadius: BorderRadius.circular(16),
                 ),
                 clipBehavior: Clip.antiAlias,
                 child: Container(
@@ -615,35 +644,38 @@ class HomeScreenState extends State<HomeScreen>
                         AppColors.background.withValues(alpha: 0.85),
                       ],
                     ),
-                    borderRadius: BorderRadius.circular(20),
+                    borderRadius: BorderRadius.circular(16),
                   ),
                   child: InkWell(
-                    borderRadius: BorderRadius.circular(20),
+                    borderRadius: BorderRadius.circular(16),
                     splashColor: AppColors.primary.withValues(alpha: 0.2),
                     highlightColor: AppColors.primary.withValues(alpha: 0.1),
                     onTap: () => _authenticateAndNavigate(schedule.id),
                     child: Padding(
-                      padding: const EdgeInsets.all(16.0),
+                      padding: const EdgeInsets.all(12.0), // Reduced padding
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
+                        mainAxisSize: MainAxisSize
+                            .min, // Add this to make the column take minimum required space
                         children: [
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
                               Container(
-                                padding: const EdgeInsets.all(8.0),
+                                padding: const EdgeInsets.all(
+                                    6.0), // Reduced padding
                                 decoration: BoxDecoration(
                                   color:
                                       AppColors.primary.withValues(alpha: 0.1),
-                                  borderRadius: BorderRadius.circular(12),
+                                  borderRadius: BorderRadius.circular(10),
                                 ),
                                 child: Icon(
                                   Icons.schedule,
                                   color: AppColors.primary,
-                                  size: isLargeScreen ? 28 : 24,
+                                  size: isLargeScreen ? 20 : 18, // Smaller icon
                                 ),
                               ),
-                              const SizedBox(width: 12),
+                              const SizedBox(width: 8), // Reduced spacing
                               Expanded(
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -654,7 +686,9 @@ class HomeScreenState extends State<HomeScreen>
                                           child: Text(
                                             schedule.name,
                                             style: TextStyle(
-                                              fontSize: isLargeScreen ? 20 : 18,
+                                              fontSize: isLargeScreen
+                                                  ? 16
+                                                  : 15, // Smaller font
                                               fontWeight: FontWeight.w700,
                                               color: AppColors.textPrimary,
                                             ),
@@ -666,17 +700,18 @@ class HomeScreenState extends State<HomeScreen>
                                         if (isOwner)
                                           Container(
                                             padding: const EdgeInsets.symmetric(
-                                                horizontal: 8, vertical: 4),
+                                                horizontal: 6,
+                                                vertical: 2), // Smaller padding
                                             decoration: BoxDecoration(
                                               color: AppColors.primary
                                                   .withValues(alpha: 0.2),
                                               borderRadius:
-                                                  BorderRadius.circular(12),
+                                                  BorderRadius.circular(8),
                                             ),
                                             child: Text(
                                               'Owner',
                                               style: TextStyle(
-                                                fontSize: 12,
+                                                fontSize: 10, // Smaller font
                                                 fontWeight: FontWeight.w600,
                                                 color: AppColors.primary,
                                               ),
@@ -684,17 +719,19 @@ class HomeScreenState extends State<HomeScreen>
                                           ),
                                       ],
                                     ),
-                                    const SizedBox(height: 8),
+                                    const SizedBox(
+                                        height: 4), // Reduced spacing
                                     Row(
                                       children: [
                                         Container(
                                           padding: const EdgeInsets.symmetric(
-                                              horizontal: 8, vertical: 4),
+                                              horizontal: 6,
+                                              vertical: 2), // Smaller padding
                                           decoration: BoxDecoration(
                                             color: statusColor.withValues(
                                                 alpha: 0.2),
                                             borderRadius:
-                                                BorderRadius.circular(12),
+                                                BorderRadius.circular(8),
                                             border: Border.all(
                                               color: statusColor.withValues(
                                                   alpha: 0.5),
@@ -707,7 +744,9 @@ class HomeScreenState extends State<HomeScreen>
                                                 : 'Draft',
                                             style: TextStyle(
                                               color: statusColor,
-                                              fontSize: isLargeScreen ? 13 : 12,
+                                              fontSize: isLargeScreen
+                                                  ? 11
+                                                  : 10, // Smaller font
                                               fontWeight: FontWeight.w600,
                                             ),
                                           ),
@@ -716,7 +755,9 @@ class HomeScreenState extends State<HomeScreen>
                                         Text(
                                           'Created: ${DateFormat('dd-MM-yy').format(schedule.createdAt)}',
                                           style: TextStyle(
-                                            fontSize: isLargeScreen ? 13 : 12,
+                                            fontSize: isLargeScreen
+                                                ? 11
+                                                : 10, // Smaller font
                                             color: AppColors.textSecondary,
                                           ),
                                         ),
@@ -727,24 +768,28 @@ class HomeScreenState extends State<HomeScreen>
                               ),
                             ],
                           ),
+                          // Optional description - show only if available
                           if (schedule.description != null &&
                               schedule.description!.isNotEmpty)
                             Padding(
                               padding: const EdgeInsets.only(
-                                  top: 12.0, left: 8.0, right: 8.0),
+                                  top: 8.0,
+                                  left: 6.0,
+                                  right: 6.0), // Reduced padding
                               child: Text(
                                 schedule.description!,
                                 style: TextStyle(
-                                  fontSize: isLargeScreen ? 15 : 14,
+                                  fontSize:
+                                      isLargeScreen ? 13 : 12, // Smaller font
                                   color: AppColors.textSecondary
                                       .withValues(alpha: 0.8),
                                 ),
-                                maxLines: 2,
+                                maxLines: 1, // Reduced to 1 line
                                 overflow: TextOverflow.ellipsis,
                                 semanticsLabel: schedule.description,
                               ),
                             ),
-                          const SizedBox(height: 12),
+                          const SizedBox(height: 8), // Reduced spacing
                           Row(
                             mainAxisAlignment: MainAxisAlignment.end,
                             children: [
@@ -752,27 +797,39 @@ class HomeScreenState extends State<HomeScreen>
                                 TextButton.icon(
                                   onPressed: () =>
                                       _navigateToCreateSchedule(schedule),
-                                  icon: const Icon(Icons.edit, size: 18),
-                                  label: const Text('Edit'),
+                                  icon: const Icon(Icons.edit,
+                                      size: 16), // Smaller icon
+                                  label: const Text('Edit',
+                                      style: TextStyle(
+                                          fontSize: 12)), // Smaller font
                                   style: TextButton.styleFrom(
                                     foregroundColor: AppColors.primary,
                                     padding: const EdgeInsets.symmetric(
-                                        horizontal: 12, vertical: 8),
+                                        horizontal: 8,
+                                        vertical: 4), // Smaller padding
+                                    minimumSize: const Size(
+                                        0, 32), // Smaller minimum size
                                   ),
                                 ),
-                              const SizedBox(width: 8),
+                              const SizedBox(width: 4), // Reduced spacing
                               ElevatedButton.icon(
                                 onPressed: () =>
                                     _authenticateAndNavigate(schedule.id),
-                                icon: const Icon(Icons.fingerprint, size: 18),
-                                label: const Text('View'),
+                                icon: const Icon(Icons.fingerprint,
+                                    size: 16), // Smaller icon
+                                label: const Text('View',
+                                    style: TextStyle(
+                                        fontSize: 12)), // Smaller font
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: AppColors.secondary,
                                   foregroundColor: AppColors.textOnPrimary,
                                   padding: const EdgeInsets.symmetric(
-                                      horizontal: 16, vertical: 8),
+                                      horizontal: 12,
+                                      vertical: 4), // Smaller padding
+                                  minimumSize:
+                                      const Size(0, 32), // Smaller minimum size
                                   shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(12),
+                                    borderRadius: BorderRadius.circular(8),
                                   ),
                                 ),
                               ),

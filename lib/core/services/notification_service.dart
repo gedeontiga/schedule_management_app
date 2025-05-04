@@ -1,3 +1,4 @@
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:uuid/uuid.dart';
 
 import '../../models/permutation_request.dart';
@@ -11,9 +12,8 @@ class NotificationService {
     try {
       final notification = {
         'id': const Uuid().v4(),
-        'user_id': userId, // Recipient of the invitation
-        'creator_id':
-            SupabaseManager.getCurrentUserId(), // Sender (authenticated user)
+        'user_id': userId,
+        'creator_id': SupabaseManager.getCurrentUserId(),
         'type': 'invitation',
         'data': {
           'schedule_id': scheduleId,
@@ -46,21 +46,75 @@ class NotificationService {
         'type': 'permutation_request',
         'data': {
           'request_id': request.id,
+          'schedule_id': request.scheduleId,
           'message':
-              'Please swap ${request.senderDay} with ${request.receiverDay}',
+              'User requests to swap your ${request.receiverDay} with their ${request.senderDay}.',
         },
+        'creator_id': request.senderId,
+        'created_at': DateTime.now().toIso8601String(),
       });
+
+      // Send mobile push notification
+      final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+      await flutterLocalNotificationsPlugin.show(
+        request.id.hashCode,
+        'Permutation Request',
+        'User requests to swap your ${request.receiverDay} with their ${request.senderDay}.',
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            'permutation_request',
+            'Permutation Requests',
+            importance: Importance.high,
+            priority: Priority.high,
+          ),
+          iOS: DarwinNotificationDetails(),
+        ),
+      );
     } catch (e) {
       throw Exception('Failed to send permutation request: $e');
     }
   }
 
-  Future<void> updatePermutationRequestStatus(
-      String requestId, String status) async {
+  Future<void> updatePermutationRequestStatus(String requestId, String status,
+      String scheduleId, String senderId, String receiverId) async {
     try {
       await _supabase
           .from('permutation_requests')
           .update({'status': status}).eq('id', requestId);
+
+      // Notify the initiator of the decision
+      final message = status == 'accepted'
+          ? 'Your permutation request for schedule $scheduleId has been accepted.'
+          : 'Your permutation request for schedule $scheduleId has been rejected.';
+      await _supabase.from('notifications').insert({
+        'user_id': senderId,
+        'type': 'permutation_response',
+        'data': {
+          'request_id': requestId,
+          'schedule_id': scheduleId,
+          'status': status,
+          'message': message,
+        },
+        'creator_id': receiverId,
+        'created_at': DateTime.now().toIso8601String(),
+      });
+
+      // Send mobile push notification to initiator
+      final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+      await flutterLocalNotificationsPlugin.show(
+        requestId.hashCode,
+        'Permutation Request Response',
+        message,
+        NotificationDetails(
+          android: AndroidNotificationDetails(
+            'permutation_response',
+            'Permutation Responses',
+            importance: Importance.high,
+            priority: Priority.high,
+          ),
+          iOS: DarwinNotificationDetails(),
+        ),
+      );
     } catch (e) {
       throw Exception('Failed to update permutation request: $e');
     }

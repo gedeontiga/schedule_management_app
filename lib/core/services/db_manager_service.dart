@@ -5,6 +5,7 @@ class DbManagerService {
   static const String _localDbName = 'scheduling_app.db';
   Database? _localDb;
 
+  /// Initializes the local SQLite database.
   Future<void> initializeLocalDatabase() async {
     try {
       final dbPath = await getDatabasesPath();
@@ -12,8 +13,9 @@ class DbManagerService {
 
       _localDb = await openDatabase(
         path,
-        version: 2, // Increment version for schema migration
+        version: 2,
         onCreate: (db, version) async {
+          // Define table schemas for local storage
           const localSchemas = [
             '''CREATE TABLE IF NOT EXISTS schedules (
               id TEXT PRIMARY KEY,
@@ -24,14 +26,15 @@ class DbManagerService {
               owner_id TEXT,
               participants TEXT,
               is_fully_set INTEGER DEFAULT 0,
-              created_at TEXT DEFAULT (datetime('now'))
+              created_at TEXT DEFAULT (datetime('now')),
+              start_date TEXT
             );''',
             '''CREATE TABLE IF NOT EXISTS participants (
               id TEXT PRIMARY KEY,
               schedule_id TEXT,
               user_id TEXT,
               roles TEXT,
-              free_days TEXT DEFAULT '[]' -- Store as JSON string
+              free_days TEXT DEFAULT '[]'
             );''',
             '''CREATE TABLE IF NOT EXISTS notifications (
               id TEXT PRIMARY KEY,
@@ -51,15 +54,16 @@ class DbManagerService {
             );''',
           ];
 
+          // Execute each schema to create tables
           for (var schema in localSchemas) {
             await db.execute(schema);
           }
         },
         onUpgrade: (db, oldVersion, newVersion) async {
+          // Handle database schema upgrades
           if (oldVersion < 2) {
-            // Migration for version 2: Add created_at to schedules and update free_days default
-            await db.execute(
-                'ALTER TABLE schedules ADD COLUMN created_at TEXT DEFAULT (datetime("now"));');
+            await db
+                .execute('ALTER TABLE schedules ADD COLUMN start_date TEXT;');
             await db.execute(
                 'ALTER TABLE participants ADD COLUMN free_days TEXT DEFAULT "[]";');
           }
@@ -71,10 +75,12 @@ class DbManagerService {
     }
   }
 
+  /// Initializes databases (currently only local).
   Future<void> initializeDatabases({bool isLocalOnly = false}) async {
     await initializeLocalDatabase();
   }
 
+  /// Provides access to the local database instance.
   Database get localDatabase {
     if (_localDb == null) {
       throw Exception('Local database not initialized or unavailable');
@@ -82,6 +88,7 @@ class DbManagerService {
     return _localDb!;
   }
 
+  /// Closes the local database connection.
   Future<void> closeLocalDatabase() async {
     if (_localDb != null) {
       await _localDb!.close();

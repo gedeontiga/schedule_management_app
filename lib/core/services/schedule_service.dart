@@ -5,6 +5,7 @@ import 'package:sqflite/sqflite.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:rxdart/rxdart.dart';
 import 'package:uuid/uuid.dart';
+import '../../models/available_day.dart';
 import '../../models/free_day.dart';
 import '../../models/schedule.dart';
 import '../../models/participant.dart';
@@ -227,20 +228,25 @@ class ScheduleService {
   Future<bool> validateFreeDays(
       String scheduleId, String userId, List<FreeDay> newFreeDays) async {
     try {
+      // Fetch schedule data
       final scheduleData = await supabase
           .from('schedules')
-          .select('available_days, duration, created_at')
+          .select('available_days, duration, start_date')
           .eq('id', scheduleId)
           .single();
 
-      final availableDays = List<String>.from(scheduleData['available_days']);
-      final createdAt = DateTime.parse(scheduleData['created_at']);
+      final availableDaysRaw = scheduleData['available_days'] as List<dynamic>;
+      final availableDays = availableDaysRaw
+          .map((d) => AvailableDay.fromJson(d as Map<String, dynamic>))
+          .toList();
+      final startDate = DateTime.parse(scheduleData['start_date']);
       final duration = scheduleData['duration'] as String;
 
+      final availableDayNames = availableDays.map((d) => d.day).toList();
       final validDates =
-          _calculateScheduleDates(createdAt, availableDays, duration);
+          _calculateScheduleDates(startDate, availableDayNames, duration);
 
-      // Check if all selected days are valid schedule dates
+      // Validate dates
       for (var freeDay in newFreeDays) {
         if (!validDates.any((date) =>
             date.year == freeDay.date.year &&
@@ -248,33 +254,44 @@ class ScheduleService {
             date.day == freeDay.date.day)) {
           return false;
         }
+
+        // Validate time constraints
+        final dayName = freeDay.day;
+        final availableDay = availableDays.firstWhere((d) => d.day == dayName);
+        final startMinutes = _timeToMinutes(availableDay.startTime);
+        final endMinutes = _timeToMinutes(availableDay.endTime);
+        final freeDayStartMinutes = _timeToMinutes(freeDay.startTime);
+        final freeDayEndMinutes = _timeToMinutes(freeDay.endTime);
+
+        if (freeDayStartMinutes < startMinutes ||
+            freeDayEndMinutes > endMinutes) {
+          return false;
+        }
       }
 
-      // Get days taken by other participants
-      final participants = await supabase
-          .from('participants')
-          .select('free_days')
-          .eq('schedule_id', scheduleId)
-          .neq('user_id', userId);
+      // Fetch real-time participant data using stream
+      final participantsStream = await getParticipantStream(scheduleId).first;
+      final takenTimeSlots = participantsStream
+          .where((p) => p.userId != userId)
+          .expand((p) => p.freeDays)
+          .toList();
 
-      final takenDates = participants
-          .map((p) =>
-              (p['free_days'] as List<dynamic>?)
-                  ?.map((d) => FreeDay.fromJson(d as Map<String, dynamic>))
-                  .toList() ??
-              [])
-          .expand((days) => days)
-          .map((d) => DateTime(d.date.year, d.date.month, d.date.day))
-          .toSet();
-
-      // Check if any selected day is already taken by another participant
+      // Check for conflicts
       for (var freeDay in newFreeDays) {
-        final normalizedDate =
-            DateTime(freeDay.date.year, freeDay.date.month, freeDay.date.day);
-        if (takenDates.any((takenDate) =>
-            takenDate.year == normalizedDate.year &&
-            takenDate.month == normalizedDate.month &&
-            takenDate.day == normalizedDate.day)) {
+        final conflictingSlots = takenTimeSlots.where((takenDay) {
+          if (takenDay.date.year != freeDay.date.year ||
+              takenDay.date.month != freeDay.date.month ||
+              takenDay.date.day != freeDay.date.day) {
+            return false;
+          }
+          final freeDayStart = _timeToMinutes(freeDay.startTime);
+          final freeDayEnd = _timeToMinutes(freeDay.endTime);
+          final takenDayStart = _timeToMinutes(takenDay.startTime);
+          final takenDayEnd = _timeToMinutes(takenDay.endTime);
+          return (freeDayStart < takenDayEnd && freeDayEnd > takenDayStart);
+        }).toList();
+
+        if (conflictingSlots.isNotEmpty) {
           return false;
         }
       }
@@ -285,7 +302,6 @@ class ScheduleService {
     }
   }
 
-// Fix for checkAndUpdateScheduleStatus method in ScheduleService class
   Future<void> checkAndUpdateScheduleStatus(String scheduleId) async {
     try {
       final scheduleData = await supabase
@@ -296,13 +312,11 @@ class ScheduleService {
 
       final schedule = Schedule.fromJson(scheduleData);
 
-      // Get all participants' free days
       final participants = await supabase
           .from('participants')
           .select()
           .eq('schedule_id', scheduleId);
 
-      // All assigned dates across all participants
       final assignedDates = participants
           .map((p) =>
               (p['free_days'] as List<dynamic>?)
@@ -313,28 +327,24 @@ class ScheduleService {
           .map((d) => DateTime(d.date.year, d.date.month, d.date.day))
           .toSet();
 
-      // All available dates in the schedule
       final scheduleDates = _calculateScheduleDates(
         schedule.createdAt,
-        schedule.availableDays,
+        schedule.availableDays.map((d) => d.day).toList(),
         schedule.duration,
       );
 
-      // Check if ALL available dates in the schedule have been assigned to participants
       final isFullySet = scheduleDates.every((date) => assignedDates.any(
           (assigned) =>
               assigned.year == date.year &&
               assigned.month == date.month &&
               assigned.day == date.day));
 
-      // Update schedule status if needed
       if (schedule.isFullySet != isFullySet) {
         if (await isOnline()) {
           await supabase
               .from('schedules')
               .update({'is_fully_set': isFullySet}).eq('id', scheduleId);
 
-          // Notify all participants about schedule status change
           final participantsData = await supabase
               .from('participants')
               .select('user_id')
@@ -369,7 +379,6 @@ class ScheduleService {
           });
         }
 
-        // Update the schedule stream
         final userId = supabase.auth.currentUser?.id;
         if (userId != null) {
           final updatedSchedules = await getUserSchedules(userId);
@@ -377,11 +386,10 @@ class ScheduleService {
         }
       }
     } catch (e) {
-      // Handle errors silently
+      // ignore
     }
   }
 
-// Fix for updateFreeDays method in ScheduleService class
   Future<void> updateFreeDays(
       String scheduleId, String userId, List<FreeDay> freeDays) async {
     if (await isOnline()) {
@@ -398,7 +406,6 @@ class ScheduleService {
             .eq('schedule_id', scheduleId)
             .eq('user_id', userId);
 
-        // Check and update schedule status immediately
         await checkAndUpdateScheduleStatus(scheduleId);
 
         final schedule = await supabase
@@ -407,7 +414,6 @@ class ScheduleService {
             .eq('id', scheduleId)
             .single();
 
-        // Notify all other participants about free days change
         final participants = await supabase
             .from('participants')
             .select('user_id')
@@ -472,7 +478,6 @@ class ScheduleService {
   Future<void> updateSchedule(Schedule schedule) async {
     if (await isOnline()) {
       try {
-        // Update basic schedule details
         await supabase.from('schedules').update({
           'name': schedule.name,
           'description': schedule.description,
@@ -481,10 +486,8 @@ class ScheduleService {
           'is_fully_set': schedule.isFullySet,
         }).eq('id', schedule.id);
 
-        // Synchronize participants
         await syncParticipants(schedule.id, schedule.participants);
 
-        // Update the schedule stream
         final userId = supabase.auth.currentUser?.id;
         if (userId != null) {
           final updatedSchedules = await getUserSchedules(userId);
@@ -554,7 +557,6 @@ class ScheduleService {
             .select('user_id, free_days')
             .eq('schedule_id', scheduleId);
 
-        // Create a map of user_id to free_days to preserve free days
         final existingFreeDaysMap = {
           for (var p in existingParticipants)
             p['user_id'] as String: (p['free_days'] as List<dynamic>?)
@@ -565,7 +567,6 @@ class ScheduleService {
         final existingUserIds = existingFreeDaysMap.keys.toSet();
         final newUserIds = participants.map((p) => p.userId).toSet();
 
-        // Identify user IDs to remove (those in existing but not in new)
         final userIdsToRemove = existingUserIds.difference(newUserIds);
         if (userIdsToRemove.isNotEmpty) {
           await supabase
@@ -575,9 +576,7 @@ class ScheduleService {
               .inFilter('user_id', userIdsToRemove.toList());
         }
 
-        // Process each participant
         for (var participant in participants) {
-          // Preserve the existing free days for this user if present
           final freeDays = existingUserIds.contains(participant.userId)
               ? participant.freeDays.isEmpty
                   ? existingFreeDaysMap[participant.userId]!
@@ -594,7 +593,6 @@ class ScheduleService {
           );
 
           if (existingUserIds.contains(participant.userId)) {
-            // Update existing participant
             await supabase
                 .from('participants')
                 .update({
@@ -607,7 +605,6 @@ class ScheduleService {
                 .eq('schedule_id', scheduleId)
                 .eq('user_id', participant.userId);
           } else {
-            // Insert new participant
             await supabase
                 .from('participants')
                 .insert(updatedParticipant.toJson());
@@ -622,7 +619,6 @@ class ScheduleService {
 
         final currentUserId = supabase.auth.currentUser?.id;
 
-        // Send notifications to all participants except the current user
         for (var participant in participants) {
           if (participant.userId != currentUserId) {
             await supabase.from('notifications').insert({
@@ -649,7 +645,6 @@ class ScheduleService {
         rethrow;
       }
     } else {
-      // Offline mode handling remains the same...
       try {
         final db = dbManager.localDatabase;
 
@@ -659,7 +654,6 @@ class ScheduleService {
           whereArgs: [scheduleId],
         );
 
-        // Create a map to preserve free days
         final existingFreeDaysMap = {
           for (var row in existingParticipantsRows)
             row['user_id'] as String: row['free_days'] as String
@@ -672,7 +666,6 @@ class ScheduleService {
         );
 
         for (var participant in participants) {
-          // Preserve free days if they exist
           final existingFreeDays =
               existingFreeDaysMap[participant.userId] ?? '[]';
 
@@ -709,17 +702,16 @@ class ScheduleService {
         .stream(primaryKey: ['id'])
         .eq('schedule_id', scheduleId)
         .listen((data) {
-          // Update participant stream
           _participantStreamController.add(
             data.map((json) => Participant.fromJson(json)).toList(),
           );
-          // Check and update schedule status
+
           checkAndUpdateScheduleStatus(scheduleId);
         });
   }
 
   List<DateTime> _calculateScheduleDates(
-      DateTime createdAt, List<String> availableDays, String duration) {
+      DateTime startDate, List<String> availableDays, String duration) {
     final daysOfWeek = [
       'Monday',
       'Tuesday',
@@ -729,8 +721,8 @@ class ScheduleService {
       'Saturday',
       'Sunday'
     ];
-    final startDate = createdAt;
     int weeks = 0;
+
     switch (duration) {
       case '1 week':
         weeks = 1;
@@ -739,13 +731,15 @@ class ScheduleService {
         weeks = 2;
         break;
       case '1 month':
-        weeks = 5; // Approximate as 5 weeks for simplicity
+        weeks = 5;
         break;
       default:
         weeks = int.parse(duration.split(' ')[0]);
     }
+
     final endDate = startDate.add(Duration(days: weeks * 7));
     final dates = <DateTime>[];
+
     for (var date = startDate;
         date.isBefore(endDate);
         date = date.add(Duration(days: 1))) {
@@ -754,7 +748,29 @@ class ScheduleService {
         dates.add(DateTime(date.year, date.month, date.day));
       }
     }
+
     return dates;
+  }
+
+  int _timeToMinutes(String timeString) {
+    if (timeString.isEmpty) return 0;
+    final parts = timeString.split(':');
+    return int.parse(parts[0]) * 60 + int.parse(parts[1]);
+  }
+
+  List<AvailableDay> _parseAvailableDays(String availableDaysString) {
+    try {
+      final List<dynamic> availableDaysJson = jsonDecode(availableDaysString);
+      return availableDaysJson
+          .map((json) => AvailableDay.fromJson(json as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      return availableDaysString
+          .split(',')
+          .map((day) => AvailableDay(
+              day: day.trim(), startTime: '08:00', endTime: '18:00'))
+          .toList();
+    }
   }
 
   Future<bool> deleteSchedule(String scheduleId) async {
@@ -816,28 +832,36 @@ class ScheduleService {
       try {
         final ownedSchedules =
             await supabase.from('schedules').select().eq('owner_id', userId);
+
         final participantSchedules = await supabase
             .from('participants')
             .select('schedule_id')
             .eq('user_id', userId);
+
         final participantScheduleIds = (participantSchedules as List)
             .map((item) => item['schedule_id'].toString())
             .toList();
+
         final processedScheduleIds =
             ownedSchedules.map((schedule) => schedule['id'] as String).toSet();
+
         final uniqueParticipantScheduleIds = participantScheduleIds
             .where((id) => !processedScheduleIds.contains(id))
             .toList();
+
         List participantSchedulesData = [];
+
         if (uniqueParticipantScheduleIds.isNotEmpty) {
           participantSchedulesData = await supabase
               .from('schedules')
               .select()
               .inFilter('id', uniqueParticipantScheduleIds);
         }
+
         final allSchedules = [...ownedSchedules, ...participantSchedulesData];
         final schedules =
             allSchedules.map((json) => Schedule.fromJson(json)).toList();
+
         scheduleStreamController.add(schedules);
         return schedules;
       } catch (e) {
@@ -851,19 +875,24 @@ class ScheduleService {
           where: 'owner_id = ?',
           whereArgs: [userId],
         );
+
         final processedScheduleIds =
             ownerSchedules.map((schedule) => schedule['id'] as String).toSet();
+
         final participantRows = await db.query(
           'participants',
           columns: ['schedule_id'],
           where: 'user_id = ?',
           whereArgs: [userId],
         );
+
         final uniqueParticipantScheduleIds = participantRows
             .map((row) => row['schedule_id'] as String)
             .where((id) => !processedScheduleIds.contains(id))
             .toList();
+
         List<Map<String, dynamic>> participantSchedules = [];
+
         for (var id in uniqueParticipantScheduleIds) {
           final rows = await db.query(
             'schedules',
@@ -872,18 +901,21 @@ class ScheduleService {
           );
           participantSchedules.addAll(rows);
         }
+
         final allSchedules = [...ownerSchedules, ...participantSchedules];
+
         return allSchedules.map((row) {
           return Schedule(
             id: row['id'] as String,
             name: row['name'] as String,
             description: row['description'] as String?,
-            availableDays: (row['available_days'] as String).split(','),
+            availableDays: _parseAvailableDays(row['available_days'] as String),
             duration: row['duration'] as String,
             ownerId: row['owner_id'] as String,
             participants: [],
             isFullySet: (row['is_fully_set'] as int) == 1,
             createdAt: DateTime.parse(row['created_at'] as String),
+            startDate: DateTime.parse(row['start_date'] as String),
           );
         }).toList();
       } catch (e) {
@@ -937,7 +969,6 @@ class ScheduleService {
             .select('user_id, free_days')
             .eq('schedule_id', scheduleId);
 
-        // Create a map of user_id to free_days
         final existingFreeDaysMap = {
           for (var p in existingParticipants)
             p['user_id'] as String: (p['free_days'] as List<dynamic>?)
@@ -948,7 +979,6 @@ class ScheduleService {
         final existingUserIds = existingFreeDaysMap.keys.toSet();
         final newUserIds = participants.map((p) => p.userId).toSet();
 
-        // Remove participants that are no longer in the list
         final userIdsToRemove = existingUserIds.difference(newUserIds);
         if (userIdsToRemove.isNotEmpty) {
           await supabase
@@ -958,7 +988,6 @@ class ScheduleService {
               .inFilter('user_id', userIdsToRemove.toList());
         }
 
-        // Update or insert participants
         for (var participant in participants) {
           final freeDays = existingUserIds.contains(participant.userId) &&
                   participant.freeDays.isEmpty

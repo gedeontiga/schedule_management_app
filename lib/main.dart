@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -47,6 +49,7 @@ void main() async {
   await Hive.initFlutter();
   await Hive.openBox('offline_operations');
   await Hive.openBox('alarms');
+  await dotenv.load(fileName: '.env.v2');
   // try {
   await SupabaseManager.initialize();
   // } catch (e) {}
@@ -69,6 +72,12 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Scheduling App',
       theme: ThemeData(
+        textTheme: GoogleFonts.montserratTextTheme(
+          Theme.of(context).textTheme,
+        ),
+        primaryTextTheme: GoogleFonts.montserratTextTheme(
+          Theme.of(context).primaryTextTheme,
+        ),
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
         useMaterial3: true,
       ),
