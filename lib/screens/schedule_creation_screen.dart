@@ -900,6 +900,7 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
                                 ],
                               ),
                             ),
+                            const SizedBox(height: 24),
                             Padding(
                               padding: EdgeInsets.symmetric(
                                   horizontal: isSmallScreen ? 0 : 48.0),

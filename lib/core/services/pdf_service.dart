@@ -1,7 +1,6 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
@@ -15,9 +14,8 @@ class PdfService {
   final PermissionService _permissionService = PermissionService();
   final supabase = SupabaseManager.client;
 
-  // Cache for the Montserrat font data
-  Uint8List? _montserratRegularData;
-  Uint8List? _montserratBoldData;
+  Uint8List? _oswaldRegularData;
+  Uint8List? _oswaldBoldData;
 
   Future<Directory> getDownloadDirectory() async {
     if (Platform.isAndroid) {
@@ -49,62 +47,19 @@ class PdfService {
     }
   }
 
-  // Load Montserrat font data
   Future<void> _loadFonts() async {
-    if (_montserratRegularData == null || _montserratBoldData == null) {
-      // Load Montserrat Regular and Bold from GoogleFonts
-      final regularFont = GoogleFonts.montserrat();
-      final boldFont = GoogleFonts.montserrat(fontWeight: FontWeight.bold);
+    if (_oswaldRegularData == null || _oswaldBoldData == null) {
+      // Load Oswald fonts directly
+      _oswaldRegularData = await rootBundle
+          .load('assets/fonts/Oswald-Regular.ttf')
+          .then((data) => data.buffer.asUint8List());
 
-      // Extract font data as Uint8List
-      _montserratRegularData = await _getFontData(regularFont);
-      _montserratBoldData = await _getFontData(boldFont);
+      _oswaldBoldData = await rootBundle
+          .load('assets/fonts/Oswald-Bold.ttf')
+          .then((data) => data.buffer.asUint8List());
     }
   }
 
-  Future<Uint8List> _getFontData(TextStyle style) async {
-    final fontFamily = style.fontFamily ?? 'Montserrat';
-    final fontWeight = style.fontWeight ?? FontWeight.normal;
-    // Map FontWeight to Google Fonts asset naming convention
-    final weightName = _fontWeightToName(fontWeight);
-    // GoogleFonts stores fonts in packages, so we need to load from the correct asset path
-    final fontAssetPath =
-        'packages/google_fonts/fonts/$fontFamily-$weightName.ttf';
-    try {
-      final fontData = await rootBundle.load(fontAssetPath);
-      return fontData.buffer.asUint8List();
-    } catch (e) {
-      throw Exception('Failed to load font $fontFamily-$weightName: $e');
-    }
-  }
-
-  // Helper method to map FontWeight to Google Fonts asset naming
-  String _fontWeightToName(FontWeight weight) {
-    switch (weight) {
-      case FontWeight.w100:
-        return 'Thin';
-      case FontWeight.w200:
-        return 'ExtraLight';
-      case FontWeight.w300:
-        return 'Light';
-      case FontWeight.w400:
-        return 'Regular';
-      case FontWeight.w500:
-        return 'Medium';
-      case FontWeight.w600:
-        return 'SemiBold';
-      case FontWeight.w700:
-        return 'Bold';
-      case FontWeight.w800:
-        return 'ExtraBold';
-      case FontWeight.w900:
-        return 'Black';
-      default:
-        return 'Regular';
-    }
-  }
-
-  // Method to load app logo from assets
   Future<Uint8List> _getAppLogo() async {
     return await rootBundle
         .load('assets/schedule_app_logo.png')
@@ -116,7 +71,6 @@ class PdfService {
       throw Exception('Schedule must be fully set to export as PDF');
     }
 
-    // Load fonts and logo
     await _loadFonts();
     final logoImage = await _getAppLogo();
 
@@ -128,21 +82,31 @@ class PdfService {
     final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
     final filePath = '${downloadDir.path}/${sanitizedName}_$timestamp.pdf';
 
-    // Create PDF document with custom theme using Google Fonts
     final pdf = pw.Document(
-      theme: pw.ThemeData.withFont(
-        base: pw.Font.ttf(ByteData.sublistView(_montserratRegularData!)),
-        bold: pw.Font.ttf(ByteData.sublistView(_montserratBoldData!)),
-      ),
+      theme: (_oswaldRegularData != null &&
+              _oswaldRegularData!.isNotEmpty &&
+              _oswaldBoldData != null &&
+              _oswaldBoldData!.isNotEmpty)
+          ? pw.ThemeData.withFont(
+              base: pw.Font.ttf(ByteData.sublistView(_oswaldRegularData!)),
+              bold: pw.Font.ttf(ByteData.sublistView(_oswaldBoldData!)),
+            )
+          : null,
     );
 
-    final participantIds = schedule.participants
-        .where((p) => p.freeDays.isNotEmpty)
-        .map((p) => p.userId)
-        .toList();
+    final participants = await supabase
+        .from('participants')
+        .select('*')
+        .eq('schedule_id', schedule.id)
+        .then((p) => p
+            .where((participant) => participant['free_days'].isNotEmpty)
+            .toList());
+
+    final participantIds =
+        participants.map((p) => p['user_id'] as String).toList();
 
     final userData = await supabase
-        .from('users')
+        .from('user_details')
         .select('id, username')
         .inFilter('id', participantIds);
 
@@ -151,12 +115,12 @@ class PdfService {
         user['id'] as String: user['username'] as String
     };
 
-    final participants =
-        schedule.participants.where((p) => p.freeDays.isNotEmpty).toList();
-
-    final PdfColor primaryColor = PdfColor.fromHex('#4285F4');
-    final PdfColor accentColor = PdfColor.fromHex('#34A853');
+    // Define colors
+    final PdfColor primaryColor = PdfColor.fromInt(0xFF2196F3);
+    final PdfColor accentColor = PdfColor.fromInt(0xFFD81B60);
     final PdfColor lightGrey = PdfColor.fromHex('#F5F5F5');
+    final PdfColor participantHeaderColor = PdfColor.fromHex('#D6E4FF');
+    final PdfColor alternateRowColor = PdfColor.fromHex('#F9F9F9');
 
     pdf.addPage(
       pw.MultiPage(
@@ -209,13 +173,11 @@ class PdfService {
                 children: [
                   pw.Text(
                     'Generated: ${DateFormat('yyyy-MM-dd HH:mm').format(DateTime.now())}',
-                    style: const pw.TextStyle(
-                        fontSize: 9, color: PdfColors.grey700),
+                    style: pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
                   ),
                   pw.Text(
                     'Page ${context.pageNumber} of ${context.pagesCount}',
-                    style: const pw.TextStyle(
-                        fontSize: 9, color: PdfColors.grey700),
+                    style: pw.TextStyle(fontSize: 9, color: PdfColors.grey700),
                   ),
                 ],
               ),
@@ -224,6 +186,7 @@ class PdfService {
         },
         build: (context) {
           return [
+            // Schedule Title
             pw.Header(
               level: 0,
               child: pw.Container(
@@ -243,6 +206,8 @@ class PdfService {
               ),
             ),
             pw.SizedBox(height: 10),
+
+            // Schedule Description (if available)
             if (schedule.description != null &&
                 schedule.description!.isNotEmpty)
               pw.Container(
@@ -253,11 +218,12 @@ class PdfService {
                 ),
                 child: pw.Text(
                   schedule.description!,
-                  style: const pw.TextStyle(
-                      fontSize: 14, color: PdfColors.grey800),
+                  style: pw.TextStyle(fontSize: 14, color: PdfColors.grey800),
                 ),
               ),
             pw.SizedBox(height: 20),
+
+            // Schedule Details Section
             pw.Header(
               level: 1,
               child: pw.Row(
@@ -279,6 +245,8 @@ class PdfService {
                 ],
               ),
             ),
+
+            // Schedule Details Table
             pw.Table(
               border: pw.TableBorder.all(color: PdfColors.grey400),
               columnWidths: {
@@ -294,7 +262,7 @@ class PdfService {
                 ),
                 _buildTableRow(
                   'Available Days',
-                  schedule.availableDays.join(', '),
+                  schedule.availableDays.map((d) => d.day).join(', '),
                 ),
                 _buildTableRow(
                   'Created On',
@@ -303,6 +271,8 @@ class PdfService {
               ],
             ),
             pw.SizedBox(height: 30),
+
+            // Participant Assignments Section
             pw.Header(
               level: 1,
               child: pw.Row(
@@ -324,9 +294,13 @@ class PdfService {
                 ],
               ),
             ),
+
+            // Participants Section - Improved layout
             ...participants.map((participant) {
-              final userName =
-                  usernameMap[participant.userId] ?? participant.userId;
+              final userName = usernameMap[participant['user_id']];
+              final roles =
+                  participant['roles'].map((role) => role['name']).join(', ');
+
               return pw.Container(
                 margin: const pw.EdgeInsets.only(bottom: 20),
                 decoration: pw.BoxDecoration(
@@ -336,59 +310,91 @@ class PdfService {
                 child: pw.Column(
                   crossAxisAlignment: pw.CrossAxisAlignment.start,
                   children: [
+                    // Participant Header
                     pw.Container(
                       padding: const pw.EdgeInsets.symmetric(
                         horizontal: 15,
                         vertical: 10,
                       ),
                       decoration: pw.BoxDecoration(
-                        color: PdfColor.fromHex('#D6E4FF'),
+                        color: participantHeaderColor,
                         borderRadius: const pw.BorderRadius.only(
                           topLeft: pw.Radius.circular(5),
                           topRight: pw.Radius.circular(5),
                         ),
                       ),
-                      child: pw.Text(
-                        'Participant: $userName',
-                        style: pw.TextStyle(
-                          fontWeight: pw.FontWeight.bold,
-                          fontSize: 16,
-                          color: PdfColors.blue900,
-                        ),
+                      child: pw.Row(
+                        mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+                        children: [
+                          pw.Text(
+                            'Participant: $userName',
+                            style: pw.TextStyle(
+                              fontWeight: pw.FontWeight.bold,
+                              fontSize: 16,
+                              color: PdfColors.blue900,
+                            ),
+                          ),
+                          pw.Text(
+                            'Roles: $roles',
+                            style: pw.TextStyle(
+                              fontSize: 12,
+                              color: PdfColors.blue800,
+                              fontStyle: pw.FontStyle.italic,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
+
+                    // Scheduled Days Table
                     pw.Padding(
                       padding: const pw.EdgeInsets.all(10),
                       child: pw.Table(
                         border: pw.TableBorder.all(color: PdfColors.grey300),
                         columnWidths: {
-                          0: const pw.FixedColumnWidth(100),
-                          1: const pw.FixedColumnWidth(100),
-                          2: const pw.FixedColumnWidth(100),
-                          3: const pw.FlexColumnWidth(),
+                          0: const pw.FixedColumnWidth(120),
+                          1: const pw.FixedColumnWidth(120),
+                          2: const pw.FlexColumnWidth(),
                         },
                         children: [
+                          // Table Header
                           pw.TableRow(
                             decoration: pw.BoxDecoration(color: lightGrey),
                             children: [
                               _buildTableCell('Day', isHeader: true),
                               _buildTableCell('Date', isHeader: true),
-                              _buildTableCell('Time', isHeader: true),
-                              _buildTableCell('Roles', isHeader: true),
+                              _buildTableCell('Time Slot', isHeader: true),
                             ],
                           ),
-                          ...participant.freeDays.map((day) {
-                            final roles = participant.roles
-                                .map((role) => role.name)
-                                .join(', ');
+
+                          // Days rows with alternating colors
+                          ...participant['free_days']
+                              .asMap()
+                              .entries
+                              .map((entry) {
+                            final index = entry.key;
+                            final day = entry.value;
+                            final date = DateTime.tryParse(day['date'])!;
+
                             return pw.TableRow(
+                              decoration: index % 2 == 1
+                                  ? pw.BoxDecoration(color: alternateRowColor)
+                                  : null,
                               children: [
-                                _buildTableCell(day.day),
                                 _buildTableCell(
-                                    DateFormat('yyyy-MM-dd').format(day.date)),
+                                  day['day'].toString(),
+                                  textStyle: pw.TextStyle(
+                                    fontWeight: pw.FontWeight.bold,
+                                  ),
+                                ),
                                 _buildTableCell(
-                                    '${day.startTime} - ${day.endTime}'),
-                                _buildTableCell(roles),
+                                  DateFormat('yyyy-MM-dd').format(date),
+                                ),
+                                _buildTimeSlotCell(
+                                  day['start_time'],
+                                  day['end_time'],
+                                  primaryColor,
+                                ),
                               ],
                             );
                           }),
@@ -414,8 +420,12 @@ class PdfService {
     return file;
   }
 
-  pw.TableRow _buildTableRow(String label, String value,
-      {bool isHeader = false, PdfColor? backgroundColor}) {
+  pw.TableRow _buildTableRow(
+    String label,
+    String value, {
+    bool isHeader = false,
+    PdfColor? backgroundColor,
+  }) {
     return pw.TableRow(
       decoration: backgroundColor != null
           ? pw.BoxDecoration(color: backgroundColor)
@@ -438,14 +448,51 @@ class PdfService {
     );
   }
 
-  pw.Widget _buildTableCell(String text, {bool isHeader = false}) {
+  pw.Widget _buildTableCell(
+    String text, {
+    bool isHeader = false,
+    pw.TextStyle? textStyle,
+  }) {
     return pw.Padding(
       padding: const pw.EdgeInsets.all(8),
       child: pw.Text(
         text,
-        style: pw.TextStyle(
-          fontWeight: isHeader ? pw.FontWeight.bold : null,
-        ),
+        style: textStyle ??
+            pw.TextStyle(
+              fontWeight: isHeader ? pw.FontWeight.bold : null,
+            ),
+      ),
+    );
+  }
+
+  pw.Widget _buildTimeSlotCell(
+      String startTime, String endTime, PdfColor accentColor) {
+    return pw.Padding(
+      padding: const pw.EdgeInsets.all(8),
+      child: pw.Row(
+        mainAxisAlignment: pw.MainAxisAlignment.start,
+        children: [
+          pw.Container(
+            padding: const pw.EdgeInsets.symmetric(
+              horizontal: 6,
+              vertical: 3,
+            ),
+            decoration: pw.BoxDecoration(
+                color: PdfColors.orange200,
+                borderRadius: pw.BorderRadius.circular(4),
+                border: pw.Border.all(
+                  color: PdfColors.blue900,
+                  width: 0.5,
+                )),
+            child: pw.Text(
+              '$startTime - $endTime',
+              style: pw.TextStyle(
+                color: PdfColors.blue900,
+                fontSize: 11,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -457,7 +504,7 @@ class PdfService {
         await channel.invokeMethod('scanFile', {'filePath': filePath});
       }
     } catch (e) {
-      // Handle the exception or log it
+      debugPrint('Error scanning media file: $e');
     }
   }
 }

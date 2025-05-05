@@ -111,21 +111,27 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
   Future<void> _updateFreeDays() async {
     setState(() => _isLoading = true);
     try {
+      debugPrint('Updating free days: ${_freeDays.length} days');
+
       if (!await _scheduleService.validateFreeDays(
           _schedule!.id, SupabaseManager.getCurrentUserId()!, _freeDays)) {
+        debugPrint('Free days validation failed');
         throw Exception('Selected days are not available or already taken');
       }
+
       await _scheduleService.updateFreeDays(
         _schedule!.id,
         SupabaseManager.getCurrentUserId()!,
         _freeDays,
       );
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Free days updated')),
         );
       }
     } catch (e) {
+      debugPrint('Error updating free days: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: $e')),
@@ -565,7 +571,7 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
       'Saturday',
       'Sunday'
     ];
-    final startDate = _schedule!.createdAt;
+    final startDate = _schedule!.startDate;
     int weeks = 0;
 
     switch (_schedule!.duration) {
@@ -1062,40 +1068,48 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
   }
 
   Future<void> _selectAvailableDay(FreeDay day) async {
-    final action = await showDialog<String>(
-      context: context,
-      builder: (context) => AlertDialog(
-        backgroundColor: AppColors.surface.withValues(alpha: 0.95),
-        title:
-            Text('${day.day} (${DateFormat('yyyy-MM-dd').format(day.date)})'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.access_time),
-              title: const Text('Select Specific Hours'),
-              onTap: () => Navigator.pop(context, 'select_hours'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.alarm),
-              title: const Text('Set Alarm'),
-              onTap: () => Navigator.pop(context, 'set_alarm'),
+    try {
+      final action = await showDialog<String>(
+        context: context,
+        builder: (context) => AlertDialog(
+          backgroundColor: AppColors.surface.withValues(alpha: 0.95),
+          title:
+              Text('${day.day} (${DateFormat('yyyy-MM-dd').format(day.date)})'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.access_time),
+                title: const Text('Select Specific Hours'),
+                onTap: () => Navigator.pop(context, 'select_hours'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.alarm),
+                title: const Text('Set Alarm'),
+                onTap: () => Navigator.pop(context, 'set_alarm'),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('CANCEL'),
             ),
           ],
         ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('CANCEL'),
-          ),
-        ],
-      ),
-    );
+      );
 
-    if (action == 'select_hours') {
-      await _selectSpecificHours(day);
-    } else if (action == 'set_alarm') {
-      await _setAlarm(day);
+      if (action == 'select_hours') {
+        await _selectSpecificHours(day);
+      } else if (action == 'set_alarm') {
+        await _setAlarm(day);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
     }
   }
 
@@ -1315,7 +1329,7 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                 ),
                                 SizedBox(height: 16),
                                 SizedBox(
-                                  height: 300,
+                                  height: 340,
                                   child: CalendarView(
                                     schedule: _schedule!,
                                     freeDays: _freeDays,

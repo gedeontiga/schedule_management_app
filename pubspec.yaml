@@ -1,8 +1,8 @@
 name: scheduling_management_app
 description: "A new Flutter project."
-publish_to: 'none'
+publish_to: "none"
 
-version: 1.0.0+1
+version: 2.0.0+1
 
 environment:
   sdk: ^3.6.0
@@ -45,11 +45,14 @@ dev_dependencies:
   flutter_lints: ^5.0.0
 
 flutter:
-
   uses-material-design: true
   assets:
     - .env.v2
     - assets/schedule_app_logo.png
+    - assets/fonts/Oswald-Bold.ttf
+    - assets/fonts/Oswald-Regular.ttf
+    - assets/fonts/Oswald-Light.ttf
+    - assets/fonts/Oswald-VariableFont_wght.ttf
 
 flutter_launcher_icons:
   android: true

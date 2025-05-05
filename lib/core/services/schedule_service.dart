@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -71,90 +72,116 @@ class ScheduleService {
   }
 
   void _initRealtimeSubscriptions() {
+    // Cancel existing subscriptions first
     _scheduleChannel?.unsubscribe();
     _participantChannel?.unsubscribe();
     _notificationChannel?.unsubscribe();
     _permutationRequestChannel?.unsubscribe();
-    _scheduleChannel = supabase
-        .channel('public:schedules')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'schedules',
-          callback: (payload) async {
-            final userId = supabase.auth.currentUser?.id;
-            if (userId != null) {
-              final updatedSchedules = await getUserSchedules(userId);
-              scheduleStreamController.add(updatedSchedules);
-            }
-          },
-        )
-        .subscribe((status, [error]) {
-      if (status == RealtimeSubscribeStatus.subscribed) {
-      } else if (error != null) {
-        Future.delayed(const Duration(seconds: 5), _initRealtimeSubscriptions);
-      }
-    });
-    _participantChannel = supabase
-        .channel('public:participants')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'participants',
-          callback: (payload) async {
-            final userId = supabase.auth.currentUser?.id;
-            if (userId != null) {
-              try {
-                final participants = await supabase
-                    .from('participants')
-                    .select()
-                    .eq('user_id', userId);
-                _participantStreamController.add(
-                    participants.map((p) => Participant.fromJson(p)).toList());
-              } catch (e) {
-                _participantStreamController.add([]);
+
+    // Add error handling and retry logic
+    try {
+      _scheduleChannel = supabase
+          .channel('public:schedules')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'schedules',
+            callback: (payload) async {
+              final userId = supabase.auth.currentUser?.id;
+              if (userId != null) {
+                final updatedSchedules = await getUserSchedules(userId);
+                scheduleStreamController.add(updatedSchedules);
               }
-            }
-          },
-        )
-        .subscribe((status, [error]) {
-      if (status == RealtimeSubscribeStatus.subscribed) {
-      } else if (error != null) {
-        Future.delayed(const Duration(seconds: 5), _initRealtimeSubscriptions);
-      }
-    });
-    _notificationChannel = supabase
-        .channel('public:notifications')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'notifications',
-          callback: (payload) {
-            _notificationStreamController.add(payload);
-          },
-        )
-        .subscribe((status, [error]) {
-      if (status == RealtimeSubscribeStatus.subscribed) {
-      } else if (error != null) {
-        Future.delayed(const Duration(seconds: 5), _initRealtimeSubscriptions);
-      }
-    });
-    _permutationRequestChannel = supabase
-        .channel('public:permutation_requests')
-        .onPostgresChanges(
-          event: PostgresChangeEvent.all,
-          schema: 'public',
-          table: 'permutation_requests',
-          callback: (payload) {
-            _permutationRequestStreamController.add(payload);
-          },
-        )
-        .subscribe((status, [error]) {
-      if (status == RealtimeSubscribeStatus.subscribed) {
-      } else if (error != null) {
-        Future.delayed(const Duration(seconds: 5), _initRealtimeSubscriptions);
-      }
-    });
+            },
+          )
+          .subscribe((status, [error]) {
+        if (status == RealtimeSubscribeStatus.subscribed) {
+          debugPrint('Successfully subscribed to schedules channel');
+        } else if (error != null) {
+          debugPrint('Error subscribing to schedules channel: $error');
+          Future.delayed(
+              const Duration(seconds: 5), _initRealtimeSubscriptions);
+        }
+      });
+
+      _participantChannel = supabase
+          .channel('public:participants')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'participants',
+            callback: (payload) async {
+              final userId = supabase.auth.currentUser?.id;
+              if (userId != null) {
+                try {
+                  final participants = await supabase
+                      .from('participants')
+                      .select()
+                      .eq('user_id', userId);
+                  _participantStreamController.add(participants
+                      .map((p) => Participant.fromJson(p))
+                      .toList());
+                } catch (e) {
+                  debugPrint('Error fetching participants: $e');
+                  _participantStreamController.add([]);
+                }
+              }
+            },
+          )
+          .subscribe((status, [error]) {
+        if (status == RealtimeSubscribeStatus.subscribed) {
+          debugPrint('Successfully subscribed to participants channel');
+        } else if (error != null) {
+          debugPrint('Error subscribing to participants channel: $error');
+          Future.delayed(
+              const Duration(seconds: 5), _initRealtimeSubscriptions);
+        }
+      });
+
+      _notificationChannel = supabase
+          .channel('public:notifications')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'notifications',
+            callback: (payload) {
+              _notificationStreamController.add(payload);
+            },
+          )
+          .subscribe((status, [error]) {
+        if (status == RealtimeSubscribeStatus.subscribed) {
+          debugPrint('Successfully subscribed to notifications channel');
+        } else if (error != null) {
+          debugPrint('Error subscribing to notifications channel: $error');
+          Future.delayed(
+              const Duration(seconds: 5), _initRealtimeSubscriptions);
+        }
+      });
+
+      _permutationRequestChannel = supabase
+          .channel('public:permutation_requests')
+          .onPostgresChanges(
+            event: PostgresChangeEvent.all,
+            schema: 'public',
+            table: 'permutation_requests',
+            callback: (payload) {
+              _permutationRequestStreamController.add(payload);
+            },
+          )
+          .subscribe((status, [error]) {
+        if (status == RealtimeSubscribeStatus.subscribed) {
+          debugPrint('Successfully subscribed to permutation requests channel');
+        } else if (error != null) {
+          debugPrint(
+              'Error subscribing to permutation requests channel: $error');
+          Future.delayed(
+              const Duration(seconds: 5), _initRealtimeSubscriptions);
+        }
+      });
+    } catch (e) {
+      debugPrint('Error initializing realtime subscriptions: $e');
+      Future.delayed(const Duration(seconds: 5), _initRealtimeSubscriptions);
+    }
   }
 
   Future<void> createSchedule(Schedule schedule) async {
@@ -228,7 +255,6 @@ class ScheduleService {
   Future<bool> validateFreeDays(
       String scheduleId, String userId, List<FreeDay> newFreeDays) async {
     try {
-      // Fetch schedule data
       final scheduleData = await supabase
           .from('schedules')
           .select('available_days, duration, start_date')
@@ -246,16 +272,19 @@ class ScheduleService {
       final validDates =
           _calculateScheduleDates(startDate, availableDayNames, duration);
 
-      // Validate dates
+      // First check that all new free days are within the valid date range
       for (var freeDay in newFreeDays) {
-        if (!validDates.any((date) =>
+        bool dateIsValid = validDates.any((date) =>
             date.year == freeDay.date.year &&
             date.month == freeDay.date.month &&
-            date.day == freeDay.date.day)) {
+            date.day == freeDay.date.day);
+
+        if (!dateIsValid) {
+          debugPrint('Date not in valid range: ${freeDay.date}');
           return false;
         }
 
-        // Validate time constraints
+        // Check time constraints
         final dayName = freeDay.day;
         final availableDay = availableDays.firstWhere((d) => d.day == dayName);
         final startMinutes = _timeToMinutes(availableDay.startTime);
@@ -265,39 +294,52 @@ class ScheduleService {
 
         if (freeDayStartMinutes < startMinutes ||
             freeDayEndMinutes > endMinutes) {
+          debugPrint(
+              'Time not in valid range: ${freeDay.startTime}-${freeDay.endTime}');
           return false;
         }
       }
 
-      // Fetch real-time participant data using stream
-      final participantsStream = await getParticipantStream(scheduleId).first;
-      final takenTimeSlots = participantsStream
-          .where((p) => p.userId != userId)
-          .expand((p) => p.freeDays)
-          .toList();
+      // Get existing taken slots
+      final participantsData = await supabase
+          .from('participants')
+          .select()
+          .eq('schedule_id', scheduleId)
+          .neq('user_id', userId);
 
-      // Check for conflicts
+      final participants =
+          participantsData.map((p) => Participant.fromJson(p)).toList();
+      final takenTimeSlots = participants.expand((p) => p.freeDays).toList();
+
+      // Check for time slot conflicts
       for (var freeDay in newFreeDays) {
         final conflictingSlots = takenTimeSlots.where((takenDay) {
+          // Check if dates match
           if (takenDay.date.year != freeDay.date.year ||
               takenDay.date.month != freeDay.date.month ||
               takenDay.date.day != freeDay.date.day) {
             return false;
           }
+
+          // Check for time overlap
           final freeDayStart = _timeToMinutes(freeDay.startTime);
           final freeDayEnd = _timeToMinutes(freeDay.endTime);
           final takenDayStart = _timeToMinutes(takenDay.startTime);
           final takenDayEnd = _timeToMinutes(takenDay.endTime);
+
           return (freeDayStart < takenDayEnd && freeDayEnd > takenDayStart);
         }).toList();
 
         if (conflictingSlots.isNotEmpty) {
+          debugPrint(
+              'Conflict detected for ${freeDay.date}: ${conflictingSlots.length} conflicts');
           return false;
         }
       }
 
       return true;
     } catch (e) {
+      debugPrint('Error validating free days: $e');
       return false;
     }
   }
@@ -328,7 +370,7 @@ class ScheduleService {
           .toSet();
 
       final scheduleDates = _calculateScheduleDates(
-        schedule.createdAt,
+        schedule.startDate,
         schedule.availableDays.map((d) => d.day).toList(),
         schedule.duration,
       );

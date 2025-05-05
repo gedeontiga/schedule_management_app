@@ -72,10 +72,10 @@ class MyApp extends StatelessWidget {
     return MaterialApp(
       title: 'Scheduling App',
       theme: ThemeData(
-        textTheme: GoogleFonts.montserratTextTheme(
+        textTheme: GoogleFonts.oswaldTextTheme(
           Theme.of(context).textTheme,
         ),
-        primaryTextTheme: GoogleFonts.montserratTextTheme(
+        primaryTextTheme: GoogleFonts.oswaldTextTheme(
           Theme.of(context).primaryTextTheme,
         ),
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
