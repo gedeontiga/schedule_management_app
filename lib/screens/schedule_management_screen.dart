@@ -37,7 +37,7 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
   final NotificationService _notificationService = NotificationService();
   final FlutterLocalNotificationsPlugin _notificationsPlugin =
       FlutterLocalNotificationsPlugin();
-  late StreamSubscription<Schedule> _scheduleSubscription;
+  StreamSubscription<Schedule?>? _scheduleSubscription;
   Schedule? _schedule;
   List<FreeDay> _freeDays = [];
   String? _selectedDay1;
@@ -47,7 +47,7 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
   bool _hasFetchedSchedule = false;
   bool _showCalendarView = false;
   List<Participant> _participants = [];
-  late StreamSubscription<List<Participant>> _participantSubscription;
+  StreamSubscription<List<Participant>>? _participantSubscription;
   String? _scheduleId;
   TimeOfDay? _selectedStartTime;
   TimeOfDay? _selectedEndTime;
@@ -60,36 +60,26 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
   @override
   void initState() {
     super.initState();
-
-    _participantSubscription = Stream<List<Participant>>.empty().listen((_) {});
-    _scheduleSubscription = Stream<Schedule>.empty().listen((_) {});
-
     _scheduleService.permutationRequestStream.listen((payload) async {
       if (payload['eventType'] == 'UPDATE' &&
           payload['new']['status'] == 'accepted') {
         await _fetchSchedule();
       }
-
-      // Add this new condition
       if (payload['eventType'] == 'INSERT' &&
           payload['new']['receiver_id'] == SupabaseManager.getCurrentUserId() &&
           payload['new']['schedule_id'] == _scheduleId) {
         await _fetchPendingPermutationRequests();
       }
     });
-
     _scheduleService.notificationStream.listen((payload) {
       if (payload['type'] == 'free_days_updated' &&
           payload['data']['schedule_id'] == _scheduleId) {
         _fetchSchedule();
       }
-
       if (payload['type'] == 'schedule_status_updated' &&
           payload['data']['schedule_id'] == _scheduleId) {
         _fetchSchedule();
       }
-
-      // Add this new condition
       if (payload['type'] == 'permutation_request' &&
           payload['data']['schedule_id'] == _scheduleId) {
         _fetchPendingPermutationRequests();
@@ -111,11 +101,8 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
   Future<void> _updateFreeDays() async {
     setState(() => _isLoading = true);
     try {
-      debugPrint('Updating free days: ${_freeDays.length} days');
-
       if (!await _scheduleService.validateFreeDays(
           _schedule!.id, SupabaseManager.getCurrentUserId()!, _freeDays)) {
-        debugPrint('Free days validation failed');
         throw Exception('Selected days are not available or already taken');
       }
 
@@ -131,7 +118,6 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
         );
       }
     } catch (e) {
-      debugPrint('Error updating free days: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Error: $e')),
@@ -178,8 +164,7 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
   }
 
   Future<void> _handlePermutationResponse(String status) async {
-    if (_currentPermutationRequest == null) return;
-
+    if (_currentPermutationRequest == null || _schedule == null) return;
     setState(() => _isLoading = true);
     try {
       final requestId = _currentPermutationRequest!['id'];
@@ -195,65 +180,56 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
         receiverId,
       );
 
-      // If accepted, we need to swap the free days
       if (status == 'accepted') {
         final senderDay = _currentPermutationRequest!['sender_day'];
         final receiverDay = _currentPermutationRequest!['receiver_day'];
-
-        // Parse the days from format 'day_yyyy-MM-dd'
         final senderDayParts = senderDay.split('_');
         final receiverDayParts = receiverDay.split('_');
-
         final senderDayName = senderDayParts[0];
         final senderDayDate = DateTime.parse(senderDayParts[1]);
-
         final receiverDayName = receiverDayParts[0];
         final receiverDayDate = DateTime.parse(receiverDayParts[1]);
 
-        // Get current free days for both participants
         final currentUser = _participants.firstWhere(
           (p) => p.userId == SupabaseManager.getCurrentUserId()!,
+          orElse: () => throw Exception('Current user not found'),
         );
-
         final requester = _participants.firstWhere(
           (p) => p.userId == senderId,
+          orElse: () => throw Exception('Requester not found'),
         );
 
-        // Find the specific free days to swap
         final myDayToGive = currentUser.freeDays.firstWhere(
           (d) =>
               d.day == receiverDayName &&
               d.date.year == receiverDayDate.year &&
               d.date.month == receiverDayDate.month &&
               d.date.day == receiverDayDate.day,
+          orElse: () => throw Exception('Receiver day not found'),
         );
-
         final theirDayToGive = requester.freeDays.firstWhere(
           (d) =>
               d.day == senderDayName &&
               d.date.year == senderDayDate.year &&
               d.date.month == senderDayDate.month &&
               d.date.day == senderDayDate.day,
+          orElse: () => throw Exception('Sender day not found'),
         );
 
-        // Create new free days lists for both users
         final myNewFreeDays = currentUser.freeDays
             .where((d) => d.date != myDayToGive.date)
             .toList()
           ..add(theirDayToGive);
-
         final theirNewFreeDays = requester.freeDays
             .where((d) => d.date != theirDayToGive.date)
             .toList()
           ..add(myDayToGive);
 
-        // Update both users' free days
         await _scheduleService.updateFreeDays(
           scheduleId,
           SupabaseManager.getCurrentUserId()!,
           myNewFreeDays,
         );
-
         await _scheduleService.updateFreeDays(
           scheduleId,
           senderId,
@@ -264,10 +240,9 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
       setState(() {
         _showPermutationRequestPopup = false;
         _currentPermutationRequest = null;
-        _fetchPendingPermutationRequests();
       });
-
-      _fetchSchedule();
+      await _fetchPendingPermutationRequests();
+      await _fetchSchedule();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -276,6 +251,35 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
       }
     } finally {
       setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _fetchPendingPermutationRequests() async {
+    try {
+      final userId = SupabaseManager.getCurrentUserId();
+      if (userId == null || _scheduleId == null) return;
+      final requests = await _scheduleService.supabase
+          .from('permutation_requests')
+          .select()
+          .eq('receiver_id', userId)
+          .eq('schedule_id', _scheduleId!)
+          .eq('status', 'pending');
+
+      setState(() {
+        _pendingPermutationRequests = List<Map<String, dynamic>>.from(requests);
+        if (_pendingPermutationRequests.isNotEmpty &&
+            !_showPermutationRequestPopup) {
+          _currentPermutationRequest = _pendingPermutationRequests.first;
+          _showPermutationRequestPopup = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (mounted) {
+              _showPermutationRequestDialog();
+            }
+          });
+        }
+      });
+    } catch (e) {
+      // Log error silently
     }
   }
 
@@ -387,33 +391,6 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
     );
   }
 
-  Future<void> _fetchPendingPermutationRequests() async {
-    try {
-      final userId = SupabaseManager.getCurrentUserId()!;
-      final requests = await _scheduleService.supabase
-          .from('permutation_requests')
-          .select()
-          .eq('receiver_id', userId)
-          .eq('schedule_id', _scheduleId!)
-          .eq('status', 'pending');
-
-      setState(() {
-        _pendingPermutationRequests = List<Map<String, dynamic>>.from(requests);
-        if (_pendingPermutationRequests.isNotEmpty &&
-            !_showPermutationRequestPopup) {
-          _currentPermutationRequest = _pendingPermutationRequests.first;
-          _showPermutationRequestPopup = true;
-          // Show the popup
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _showPermutationRequestDialog();
-          });
-        }
-      });
-    } catch (e) {
-      debugPrint('Error fetching permutation requests: $e');
-    }
-  }
-
   Future<void> _setAlarm(FreeDay day) async {
     final selectedAlarm = await showDialog<String>(
       context: context,
@@ -470,7 +447,7 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
   }
 
   Future<void> _exportPdf() async {
-    if (!_schedule!.isFullySet) {
+    if (_schedule == null || !_schedule!.isFullySet) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Schedule is not fully set')),
       );
@@ -478,81 +455,78 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
     }
 
     setState(() => _isLoading = true);
-
     try {
       final pdfService = PdfService();
-
-      try {
-        final file = await pdfService.generateSchedulePdf(_schedule!);
-
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('PDF exported to ${file.path}'),
-              action: SnackBarAction(
-                label: 'OPEN',
-                onPressed: () async {
-                  final openResult = await OpenFile.open(file.path);
-                  if (openResult.type != ResultType.done) {
-                    if (mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(
-                            content: Text(
-                                'Error opening file: ${openResult.message}')),
-                      );
-                    }
-                  }
-                },
+      final file = await pdfService.generateSchedulePdf(_schedule!);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('PDF exported to ${file.path}'),
+            action: SnackBarAction(
+              label: 'OPEN',
+              onPressed: () async {
+                final openResult = await OpenFile.open(file.path);
+                if (openResult.type != ResultType.done && mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content:
+                          Text('Error opening file: ${openResult.message}'),
+                    ),
+                  );
+                }
+              },
+            ),
+          ),
+        );
+      }
+    } on PlatformException catch (e) {
+      if (e.code == 'PERMISSION_DENIED' && mounted) {
+        final permissionService = PermissionService();
+        final status = await permissionService.requestStoragePermission();
+        if (status == PermissionStatus.permanentlyDenied && mounted) {
+          await showDialog(
+            context: context,
+            builder: (context) => AlertDialog(
+              title: const Text('Storage Permission Required'),
+              content: const Text(
+                'To save PDF files, we need permission to access your device storage. '
+                'Please grant this permission in your device settings.',
               ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(context),
+                  child: const Text('CANCEL'),
+                ),
+                TextButton(
+                  onPressed: () async {
+                    Navigator.pop(context);
+                    await permissionService.openAppSettings();
+                  },
+                  child: const Text('OPEN SETTINGS'),
+                ),
+              ],
             ),
           );
-        }
-      } on PlatformException catch (e) {
-        if (e.code == 'PERMISSION_DENIED') {
-          final permissionService = PermissionService();
-          final status = await permissionService.requestStoragePermission();
-
-          if (status == PermissionStatus.permanentlyDenied && mounted) {
-            await showDialog(
-              context: context,
-              builder: (context) => AlertDialog(
-                title: const Text('Storage Permission Required'),
-                content: const Text(
-                    'To save PDF files, we need permission to access your device storage. '
-                    'Please grant this permission in your device settings.'),
-                actions: [
-                  TextButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: const Text('CANCEL'),
-                  ),
-                  TextButton(
-                    onPressed: () async {
-                      Navigator.pop(context);
-                      await permissionService.openAppSettings();
-                    },
-                    child: const Text('OPEN SETTINGS'),
-                  ),
-                ],
-              ),
-            );
-          } else if (mounted) {
+        } else {
+          if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               const SnackBar(
-                  content:
-                      Text('Storage permission is required to save PDF files')),
+                content:
+                    Text('Storage permission is required to save PDF files'),
+              ),
             );
           }
-        } else if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error: ${e.message}')),
-          );
         }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error: $e')),
-          );
-        }
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: ${e.message}')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error exporting PDF: $e')),
+        );
       }
     } finally {
       setState(() => _isLoading = false);
@@ -661,24 +635,25 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
 
   void _calculateAvailableTimeSlots() {
     if (_schedule == null) return;
-
     _availableTimeSlots = {};
-
     final allTakenSlots = <String, List<TimeSlot>>{};
 
     for (var participant in _participants) {
       for (var freeDay in participant.freeDays) {
         final dateKey = DateFormat('yyyy-MM-dd').format(freeDay.date);
-
-        final timeSlot = TimeSlot(
-          startTime: freeDay.startTime,
-          endTime: freeDay.endTime,
-        );
-
-        if (allTakenSlots.containsKey(dateKey)) {
-          allTakenSlots[dateKey]!.add(timeSlot);
-        } else {
-          allTakenSlots[dateKey] = [timeSlot];
+        try {
+          final timeSlot = TimeSlot(
+            startTime: freeDay.startTime,
+            endTime: freeDay.endTime,
+          );
+          if (allTakenSlots.containsKey(dateKey)) {
+            allTakenSlots[dateKey]!.add(timeSlot);
+          } else {
+            allTakenSlots[dateKey] = [timeSlot];
+          }
+        } catch (e) {
+          // Skip invalid time slots
+          continue;
         }
       }
     }
@@ -686,7 +661,6 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
     for (var weekDays in _availableWeeklyDays) {
       for (var availableDay in weekDays) {
         final dateKey = DateFormat('yyyy-MM-dd').format(availableDay.date);
-
         final dayConstraint = _schedule!.availableDays.firstWhere(
           (d) => d.day == availableDay.day,
           orElse: () => AvailableDay(
@@ -700,43 +674,36 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
           startTime: dayConstraint.startTime,
           endTime: dayConstraint.endTime,
         );
-
         List<TimeSlot> availableSlots = [fullDaySlot];
 
         if (allTakenSlots.containsKey(dateKey)) {
           final takenSlots = allTakenSlots[dateKey]!;
-
           takenSlots.sort((a, b) => a.startMinutes.compareTo(b.startMinutes));
 
           for (var takenSlot in takenSlots) {
             List<TimeSlot> newAvailableSlots = [];
-
             for (var availableSlot in availableSlots) {
               if (availableSlot.endMinutes <= takenSlot.startMinutes ||
                   availableSlot.startMinutes >= takenSlot.endMinutes) {
                 newAvailableSlots.add(availableSlot);
                 continue;
               }
-
               if (takenSlot.startMinutes <= availableSlot.startMinutes &&
                   takenSlot.endMinutes >= availableSlot.endMinutes) {
                 continue;
               }
-
               if (takenSlot.startMinutes > availableSlot.startMinutes &&
                   takenSlot.endMinutes < availableSlot.endMinutes) {
                 newAvailableSlots.add(TimeSlot(
                   startTime: availableSlot.startTime,
                   endTime: takenSlot.startTime,
                 ));
-
                 newAvailableSlots.add(TimeSlot(
                   startTime: takenSlot.endTime,
                   endTime: availableSlot.endTime,
                 ));
                 continue;
               }
-
               if (takenSlot.startMinutes <= availableSlot.startMinutes &&
                   takenSlot.endMinutes > availableSlot.startMinutes) {
                 newAvailableSlots.add(TimeSlot(
@@ -745,7 +712,6 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                 ));
                 continue;
               }
-
               if (takenSlot.startMinutes < availableSlot.endMinutes &&
                   takenSlot.endMinutes >= availableSlot.endMinutes) {
                 newAvailableSlots.add(TimeSlot(
@@ -755,7 +721,6 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                 continue;
               }
             }
-
             availableSlots = newAvailableSlots;
           }
         }
@@ -1129,31 +1094,21 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
     try {
       final schedules = await _scheduleService
           .getUserSchedules(SupabaseManager.getCurrentUserId()!)
-          .timeout(const Duration(seconds: 10));
-
+          .timeout(const Duration(seconds: 5));
       if (schedules.isEmpty) {
         throw Exception('No schedules found for this user');
       }
-
-      _schedule = schedules.firstWhere(
-        (s) => s.id == _scheduleId,
-        orElse: () =>
-            throw Exception('Schedule with ID $_scheduleId not found'),
-      );
-
-      final currentParticipant = _schedule!.participants.firstWhere(
-        (p) => p.userId == SupabaseManager.getCurrentUserId()!,
-      );
-
+      _schedule = schedules.firstWhere((s) => s.id == _scheduleId,
+          orElse: () =>
+              throw Exception('Schedule with ID $_scheduleId not found'));
+      final currentParticipant = _schedule!.participants
+          .firstWhere((p) => p.userId == SupabaseManager.getCurrentUserId()!);
       _freeDays = currentParticipant.freeDays;
       _participants = _schedule!.participants;
 
-      try {
-        _participantSubscription.cancel();
-        _scheduleSubscription.cancel();
-      } catch (e) {
-        // ignore
-      }
+      // Cancel existing subscriptions safely using null-aware operator
+      _participantSubscription?.cancel();
+      _scheduleSubscription?.cancel();
 
       _participantSubscription = _scheduleService
           .getParticipantStream(_scheduleId!)
@@ -1161,14 +1116,12 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
         setState(() {
           _participants = participants;
           final currentUser = participants.firstWhere(
-            (p) => p.userId == SupabaseManager.getCurrentUserId()!,
-            orElse: () => Participant(
-              userId: SupabaseManager.getCurrentUserId()!,
-              scheduleId: _scheduleId!,
-              roles: [],
-              freeDays: [],
-            ),
-          );
+              (p) => p.userId == SupabaseManager.getCurrentUserId()!,
+              orElse: () => Participant(
+                  userId: SupabaseManager.getCurrentUserId()!,
+                  scheduleId: _scheduleId!,
+                  roles: [],
+                  freeDays: []));
           _freeDays = currentUser.freeDays;
           if (_schedule != null) {
             _schedule = _schedule!.copyWith(participants: participants);
@@ -1199,15 +1152,13 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
 
       final alarmBox = Hive.box('alarms');
       _alarms.addAll(alarmBox.toMap().cast<String, String>());
-
       _availableWeeklyDays = _getWeeklyAvailableDays();
       _calculateAvailableTimeSlots();
       await _fetchPendingPermutationRequests();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading schedule: $e')),
-        );
+            SnackBar(content: Text('Error loading schedule: $e')));
         Navigator.pop(context);
       }
     } finally {
@@ -1217,8 +1168,9 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
 
   @override
   void dispose() {
-    _participantSubscription.cancel();
-    _scheduleSubscription.cancel();
+    _participantSubscription?.cancel();
+    _scheduleSubscription?.cancel();
+    _scheduleService.dispose();
     super.dispose();
   }
 
@@ -1246,8 +1198,10 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(_schedule!.name,
-            style: TextStyle(fontWeight: FontWeight.w600)),
+        title: Text(
+          _schedule!.name,
+          style: TextStyle(fontWeight: FontWeight.w600),
+        ),
         backgroundColor: Colors.transparent,
         elevation: 0,
         flexibleSpace: Container(
@@ -1255,7 +1209,7 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
             gradient: LinearGradient(
               colors: [
                 AppColors.primary.withValues(alpha: 0.6),
-                AppColors.secondary.withValues(alpha: 0.5)
+                AppColors.secondary.withValues(alpha: 0.5),
               ],
               begin: Alignment.topLeft,
               end: Alignment.bottomRight,
@@ -1274,9 +1228,9 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
             },
           ),
           IconButton(
-            icon: Icon(Icons.file_download, color: AppColors.textOnPrimary),
-            tooltip: 'Export as PDF',
-            onPressed: _schedule!.isFullySet ? _exportPdf : null,
+            icon: Icon(Icons.refresh_sharp, color: AppColors.textOnPrimary),
+            tooltip: 'Refresh Schedule',
+            onPressed: _fetchSchedule,
           ),
         ],
       ),
@@ -1299,13 +1253,15 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
+                      // Conditionally show either the Calendar View or the Select Free Days card
                       if (_showCalendarView)
                         Card(
                           elevation: 8,
                           shadowColor:
                               AppColors.secondary.withValues(alpha: 0.5),
                           shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(20)),
+                            borderRadius: BorderRadius.circular(20),
+                          ),
                           color: Colors.white.withAlpha(243),
                           child: Padding(
                             padding: const EdgeInsets.all(20.0),
@@ -1314,8 +1270,11 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                               children: [
                                 Row(
                                   children: [
-                                    Icon(Icons.calendar_view_month,
-                                        color: AppColors.primary, size: 28),
+                                    Icon(
+                                      Icons.calendar_view_month,
+                                      color: AppColors.primary,
+                                      size: 28,
+                                    ),
                                     SizedBox(width: 12),
                                     Text(
                                       'Calendar View',
@@ -1341,293 +1300,313 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                               ],
                             ),
                           ),
-                        ),
-                      SizedBox(height: _showCalendarView ? 24 : 0),
-                      Card(
-                        elevation: 8,
-                        shadowColor: AppColors.secondary.withValues(alpha: 0.5),
-                        shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20)),
-                        color: Colors.white.withAlpha(243),
-                        child: Padding(
-                          padding: const EdgeInsets.all(20.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Row(
-                                children: [
-                                  Icon(Icons.event_available,
-                                      color: AppColors.primary, size: 28),
-                                  SizedBox(width: 12),
-                                  Text(
-                                    'Select Your Free Days',
-                                    style: TextStyle(
-                                      fontSize: 16,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppColors.textPrimary,
-                                    ),
-                                  ),
-                                  Spacer(),
-                                  Container(
-                                    padding: EdgeInsets.symmetric(
-                                        horizontal: 12, vertical: 6),
-                                    decoration: BoxDecoration(
-                                      color: AppColors.primary.withAlpha(52),
-                                      borderRadius: BorderRadius.circular(20),
-                                    ),
-                                    child: Text(
-                                      '${_freeDays.length}/${_schedule!.availableDays.length * weeklyAvailableDays.length}',
-                                      style: TextStyle(
-                                        fontWeight: FontWeight.bold,
-                                        color: AppColors.primary,
-                                      ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              SizedBox(height: 16),
-                              Text(
-                                _schedule!.isFullySet
-                                    ? 'Schedule is fully set. You can modify your free days.'
-                                    : 'Select your available days for each week:',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: _schedule!.isFullySet
-                                      ? AppColors.tertiary
-                                      : AppColors.textSecondary,
-                                ),
-                              ),
-                              SizedBox(height: 20),
-                              ...weeklyAvailableDays
-                                  .asMap()
-                                  .entries
-                                  .map((entry) {
-                                final weekIndex = entry.key;
-                                final weekDays = entry.value;
-                                return Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
+                        )
+                      else
+                        Card(
+                          elevation: 8,
+                          shadowColor:
+                              AppColors.secondary.withValues(alpha: 0.5),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(20),
+                          ),
+                          color: Colors.white.withAlpha(243),
+                          child: Padding(
+                            padding: const EdgeInsets.all(20.0),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(
                                   children: [
+                                    Icon(
+                                      Icons.event_available,
+                                      color: AppColors.primary,
+                                      size: 28,
+                                    ),
+                                    SizedBox(width: 12),
                                     Text(
-                                      'Week ${weekIndex + 1}',
+                                      'Select Your Free Days',
                                       style: TextStyle(
                                         fontSize: 16,
-                                        fontWeight: FontWeight.w600,
-                                        color: AppColors.primary,
+                                        fontWeight: FontWeight.bold,
+                                        color: AppColors.textPrimary,
                                       ),
                                     ),
-                                    SizedBox(height: 8),
-                                    Wrap(
-                                      spacing: 12,
-                                      runSpacing: 12,
-                                      children: weekDays.map((day) {
-                                        final isSelected = _freeDays
-                                            .any((d) => d.date == day.date);
-                                        final hasAlarm = _alarms.containsKey(
-                                            '${day.day}_${DateFormat('yyyy-MM-dd').format(day.date)}');
-
-                                        final selectedDay = isSelected
-                                            ? _freeDays.firstWhere(
-                                                (d) =>
-                                                    d.date.year ==
-                                                        day.date.year &&
-                                                    d.date.month ==
-                                                        day.date.month &&
-                                                    d.date.day == day.date.day,
-                                                orElse: () => day)
-                                            : day;
-
-                                        return GestureDetector(
-                                          onTap: () => _selectAvailableDay(day),
-                                          onLongPress: isSelected
-                                              ? () => _removeFreeDay(day)
-                                              : null,
-                                          child: AnimatedContainer(
-                                            duration:
-                                                Duration(milliseconds: 300),
-                                            padding: EdgeInsets.symmetric(
-                                                horizontal: 16, vertical: 12),
-                                            decoration: BoxDecoration(
-                                              color: isSelected
-                                                  ? AppColors.primary
-                                                  : Colors.grey.shade100,
-                                              borderRadius:
-                                                  BorderRadius.circular(16),
-                                              boxShadow: [
-                                                BoxShadow(
-                                                  color: isSelected
-                                                      ? AppColors.primary
-                                                          .withAlpha(100)
-                                                      : Colors.black
-                                                          .withAlpha(26),
-                                                  blurRadius: 8,
-                                                  offset: Offset(0, 3),
-                                                  spreadRadius: 1,
-                                                ),
-                                              ],
-                                              border: isSelected
-                                                  ? Border.all(
-                                                      color: AppColors.secondary
-                                                          .withAlpha(150),
-                                                      width: 2)
-                                                  : null,
-                                            ),
-                                            child: Stack(
-                                              children: [
-                                                Column(
-                                                  children: [
-                                                    Text(
-                                                      day.day,
-                                                      style: TextStyle(
-                                                        color: isSelected
-                                                            ? AppColors
-                                                                .textOnPrimary
-                                                            : AppColors
-                                                                .textPrimary,
-                                                        fontWeight:
-                                                            FontWeight.w600,
-                                                        fontSize: 15,
+                                    Spacer(),
+                                    Container(
+                                      padding: EdgeInsets.symmetric(
+                                          horizontal: 12, vertical: 6),
+                                      decoration: BoxDecoration(
+                                        color: AppColors.primary.withAlpha(52),
+                                        borderRadius: BorderRadius.circular(20),
+                                      ),
+                                      child: Text(
+                                        '${_freeDays.length}/${_schedule!.availableDays.length * weeklyAvailableDays.length}',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.bold,
+                                          color: AppColors.primary,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                SizedBox(height: 16),
+                                Text(
+                                  _schedule!.isFullySet
+                                      ? 'Schedule is fully set. You can modify your free days.'
+                                      : 'Select your available days for each week:',
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    color: _schedule!.isFullySet
+                                        ? AppColors.tertiary
+                                        : AppColors.textSecondary,
+                                  ),
+                                ),
+                                SizedBox(height: 20),
+                                ...weeklyAvailableDays
+                                    .asMap()
+                                    .entries
+                                    .map((entry) {
+                                  final weekIndex = entry.key;
+                                  final weekDays = entry.value;
+                                  return Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Week ${weekIndex + 1}',
+                                        style: TextStyle(
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w600,
+                                          color: AppColors.primary,
+                                        ),
+                                      ),
+                                      SizedBox(height: 8),
+                                      Wrap(
+                                        spacing: 12,
+                                        runSpacing: 12,
+                                        children: weekDays.map((day) {
+                                          final isSelected = _freeDays
+                                              .any((d) => d.date == day.date);
+                                          final hasAlarm = _alarms.containsKey(
+                                              '${day.day}_${DateFormat('yyyy-MM-dd').format(day.date)}');
+                                          final selectedDay = isSelected
+                                              ? _freeDays.firstWhere(
+                                                  (d) =>
+                                                      d.date.year ==
+                                                          day.date.year &&
+                                                      d.date.month ==
+                                                          day.date.month &&
+                                                      d.date.day ==
+                                                          day.date.day,
+                                                  orElse: () => day)
+                                              : day;
+                                          return GestureDetector(
+                                            onTap: () =>
+                                                _selectAvailableDay(day),
+                                            onLongPress: isSelected
+                                                ? () => _removeFreeDay(day)
+                                                : null,
+                                            child: AnimatedContainer(
+                                              duration:
+                                                  Duration(milliseconds: 300),
+                                              padding: EdgeInsets.symmetric(
+                                                  horizontal: 16, vertical: 12),
+                                              decoration: BoxDecoration(
+                                                color: isSelected
+                                                    ? AppColors.primary
+                                                    : Colors.grey.shade100,
+                                                borderRadius:
+                                                    BorderRadius.circular(16),
+                                                boxShadow: [
+                                                  BoxShadow(
+                                                    color: isSelected
+                                                        ? AppColors.primary
+                                                            .withAlpha(100)
+                                                        : Colors.black
+                                                            .withAlpha(26),
+                                                    blurRadius: 8,
+                                                    offset: Offset(0, 3),
+                                                    spreadRadius: 1,
+                                                  ),
+                                                ],
+                                                border: isSelected
+                                                    ? Border.all(
+                                                        color: AppColors
+                                                            .secondary
+                                                            .withAlpha(150),
+                                                        width: 2)
+                                                    : null,
+                                              ),
+                                              child: Stack(
+                                                children: [
+                                                  Column(
+                                                    children: [
+                                                      Text(
+                                                        day.day,
+                                                        style: TextStyle(
+                                                          color: isSelected
+                                                              ? AppColors
+                                                                  .textOnPrimary
+                                                              : AppColors
+                                                                  .textPrimary,
+                                                          fontWeight:
+                                                              FontWeight.w600,
+                                                          fontSize: 15,
+                                                        ),
                                                       ),
-                                                    ),
-                                                    SizedBox(height: 6),
-                                                    Text(
-                                                      DateFormat('dd-MM-yy')
-                                                          .format(day.date),
-                                                      style: TextStyle(
-                                                        color: isSelected
-                                                            ? AppColors
-                                                                .textOnPrimary
-                                                                .withAlpha(220)
-                                                            : AppColors
-                                                                .textSecondary,
-                                                        fontSize: 12,
+                                                      SizedBox(height: 6),
+                                                      Text(
+                                                        DateFormat('dd-MM-yy')
+                                                            .format(day.date),
+                                                        style: TextStyle(
+                                                          color: isSelected
+                                                              ? AppColors
+                                                                  .textOnPrimary
+                                                                  .withAlpha(
+                                                                      220)
+                                                              : AppColors
+                                                                  .textSecondary,
+                                                          fontSize: 12,
+                                                        ),
                                                       ),
-                                                    ),
-                                                    if (isSelected)
-                                                      Padding(
-                                                        padding:
-                                                            const EdgeInsets
-                                                                .only(top: 6),
-                                                        child: Text(
-                                                          '${selectedDay.startTime} - ${selectedDay.endTime}',
-                                                          style: TextStyle(
-                                                            color: isSelected
-                                                                ? AppColors
-                                                                    .textOnPrimary
-                                                                    .withAlpha(
-                                                                        180)
-                                                                : AppColors
-                                                                    .textSecondary
-                                                                    .withAlpha(
-                                                                        180),
-                                                            fontSize: 10,
-                                                            fontWeight:
-                                                                FontWeight.w500,
+                                                      if (isSelected)
+                                                        Padding(
+                                                          padding:
+                                                              const EdgeInsets
+                                                                  .only(top: 6),
+                                                          child: Text(
+                                                            '${selectedDay.startTime} - ${selectedDay.endTime}',
+                                                            style: TextStyle(
+                                                              color: isSelected
+                                                                  ? AppColors
+                                                                      .textOnPrimary
+                                                                      .withAlpha(
+                                                                          180)
+                                                                  : AppColors
+                                                                      .textSecondary
+                                                                      .withAlpha(
+                                                                          180),
+                                                              fontSize: 10,
+                                                              fontWeight:
+                                                                  FontWeight
+                                                                      .w500,
+                                                            ),
+                                                          ),
+                                                        ),
+                                                    ],
+                                                  ),
+                                                  if (hasAlarm)
+                                                    Positioned(
+                                                      right: 0,
+                                                      top: 0,
+                                                      child: Container(
+                                                        width: 12,
+                                                        height: 12,
+                                                        decoration:
+                                                            BoxDecoration(
+                                                          color: Colors.red,
+                                                          shape:
+                                                              BoxShape.circle,
+                                                          border: Border.all(
+                                                            color: Colors.white,
+                                                            width: 1,
                                                           ),
                                                         ),
                                                       ),
-                                                  ],
-                                                ),
-                                                if (hasAlarm)
-                                                  Positioned(
-                                                    right: 0,
-                                                    top: 0,
-                                                    child: Container(
-                                                      width: 12,
-                                                      height: 12,
-                                                      decoration: BoxDecoration(
-                                                        color: Colors.red,
-                                                        shape: BoxShape.circle,
-                                                        border: Border.all(
-                                                            color: Colors.white,
-                                                            width: 1),
-                                                      ),
                                                     ),
-                                                  ),
+                                                ],
+                                              ),
+                                            ),
+                                          );
+                                        }).toList(),
+                                      ),
+                                      SizedBox(height: 16),
+                                    ],
+                                  );
+                                }),
+                                SizedBox(height: 16),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: GradientButton(
+                                        text: 'Save Free Days',
+                                        onPressed: _updateFreeDays,
+                                        isLoading: _isLoading,
+                                        icon: Icons.save,
+                                      ),
+                                    ),
+                                    if (_freeDays.isNotEmpty) ...[
+                                      SizedBox(width: 12),
+                                      IconButton(
+                                        icon: Icon(
+                                          Icons.alarm,
+                                          color: AppColors.primary,
+                                        ),
+                                        onPressed: () {
+                                          showDialog(
+                                            context: context,
+                                            builder: (context) => AlertDialog(
+                                              title: Text('Configured Alarms'),
+                                              content: SizedBox(
+                                                width: double.maxFinite,
+                                                child: ListView.builder(
+                                                  shrinkWrap: true,
+                                                  itemCount: _alarms.length,
+                                                  itemBuilder:
+                                                      (context, index) {
+                                                    final key = _alarms.keys
+                                                        .elementAt(index);
+                                                    final duration =
+                                                        _alarms[key] ?? '';
+                                                    final parts =
+                                                        key.split('_');
+                                                    final day = parts[0];
+                                                    final date = parts[1];
+                                                    return ListTile(
+                                                      title:
+                                                          Text('$day ($date)'),
+                                                      subtitle: Text(
+                                                          '$duration before'),
+                                                      trailing: IconButton(
+                                                        icon:
+                                                            Icon(Icons.delete),
+                                                        onPressed: () {
+                                                          setState(() {
+                                                            _alarms.remove(key);
+                                                          });
+                                                          Navigator.pop(
+                                                              context);
+                                                        },
+                                                      ),
+                                                    );
+                                                  },
+                                                ),
+                                              ),
+                                              actions: [
+                                                TextButton(
+                                                  onPressed: () =>
+                                                      Navigator.pop(context),
+                                                  child: Text('Close'),
+                                                ),
                                               ],
                                             ),
-                                          ),
-                                        );
-                                      }).toList(),
-                                    ),
-                                    SizedBox(height: 16),
+                                          );
+                                        },
+                                        tooltip: 'Manage Alarms',
+                                      ),
+                                    ],
                                   ],
-                                );
-                              }),
-                              SizedBox(height: 16),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: GradientButton(
-                                      text: 'Save Free Days',
-                                      onPressed: _updateFreeDays,
-                                      isLoading: _isLoading,
-                                      icon: Icons.save,
-                                    ),
-                                  ),
-                                  if (_freeDays.isNotEmpty) ...[
-                                    SizedBox(width: 12),
-                                    IconButton(
-                                      icon: Icon(Icons.alarm,
-                                          color: AppColors.primary),
-                                      onPressed: () {
-                                        showDialog(
-                                          context: context,
-                                          builder: (context) => AlertDialog(
-                                            title: Text('Configured Alarms'),
-                                            content: SizedBox(
-                                              width: double.maxFinite,
-                                              child: ListView.builder(
-                                                shrinkWrap: true,
-                                                itemCount: _alarms.length,
-                                                itemBuilder: (context, index) {
-                                                  final key = _alarms.keys
-                                                      .elementAt(index);
-                                                  final duration =
-                                                      _alarms[key] ?? '';
-                                                  final parts = key.split('_');
-                                                  final day = parts[0];
-                                                  final date = parts[1];
-                                                  return ListTile(
-                                                    title: Text('$day ($date)'),
-                                                    subtitle: Text(
-                                                        '$duration before'),
-                                                    trailing: IconButton(
-                                                      icon: Icon(Icons.delete),
-                                                      onPressed: () {
-                                                        setState(() {
-                                                          _alarms.remove(key);
-                                                        });
-                                                        Navigator.pop(context);
-                                                      },
-                                                    ),
-                                                  );
-                                                },
-                                              ),
-                                            ),
-                                            actions: [
-                                              TextButton(
-                                                onPressed: () =>
-                                                    Navigator.pop(context),
-                                                child: Text('Close'),
-                                              ),
-                                            ],
-                                          ),
-                                        );
-                                      },
-                                      tooltip: 'Manage Alarms',
-                                    ),
-                                  ],
-                                ],
-                              ),
-                            ],
+                                ),
+                              ],
+                            ),
                           ),
                         ),
-                      ),
                       SizedBox(height: 24),
                       Card(
                         elevation: 8,
                         shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20)),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
                         color: Colors.white.withAlpha(243),
                         child: Padding(
                           padding: const EdgeInsets.all(20.0),
@@ -1636,8 +1615,11 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                             children: [
                               Row(
                                 children: [
-                                  Icon(Icons.swap_horiz,
-                                      color: AppColors.primary, size: 28),
+                                  Icon(
+                                    Icons.swap_horiz,
+                                    color: AppColors.primary,
+                                    size: 28,
+                                  ),
                                   SizedBox(width: 12),
                                   Text(
                                     'Request Schedule Swap',
@@ -1668,33 +1650,38 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                         Text(
                                           'Your Day:',
                                           style: TextStyle(
-                                              fontWeight: FontWeight.w500),
+                                            fontWeight: FontWeight.w500,
+                                          ),
                                         ),
                                         SizedBox(height: 8),
                                         DropdownButtonFormField<String>(
                                           decoration: InputDecoration(
                                             prefixIcon: Icon(
-                                                Icons.calendar_today,
-                                                color: AppColors.primary),
+                                              Icons.calendar_today,
+                                              color: AppColors.primary,
+                                            ),
                                             border: OutlineInputBorder(
                                               borderRadius:
                                                   BorderRadius.circular(12),
                                             ),
                                             contentPadding:
                                                 EdgeInsets.symmetric(
-                                                    horizontal: 12,
-                                                    vertical: 8),
+                                              horizontal: 12,
+                                              vertical: 8,
+                                            ),
                                           ),
                                           value: _selectedDay1,
                                           hint: Text('Select your day'),
                                           items: _freeDays
-                                              .map((day) =>
-                                                  DropdownMenuItem<String>(
-                                                    value:
-                                                        '${day.day}_${DateFormat('yyyy-MM-dd').format(day.date)}',
-                                                    child: Text(
-                                                        '${day.day} (${DateFormat('yyyy-MM-dd').format(day.date)})'),
-                                                  ))
+                                              .map(
+                                                (day) =>
+                                                    DropdownMenuItem<String>(
+                                                  value:
+                                                      '${day.day}_${DateFormat('yyyy-MM-dd').format(day.date)}',
+                                                  child: Text(
+                                                      '${day.day} (${DateFormat('yyyy-MM-dd').format(day.date)})'),
+                                                ),
+                                              )
                                               .toList(),
                                           onChanged: (value) {
                                             setState(() {
@@ -1707,8 +1694,10 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                     ),
                                   ),
                                   SizedBox(width: 16),
-                                  Icon(Icons.swap_horiz,
-                                      color: AppColors.primary),
+                                  Icon(
+                                    Icons.swap_horiz,
+                                    color: AppColors.primary,
+                                  ),
                                   SizedBox(width: 16),
                                   Expanded(
                                     child: Column(
@@ -1718,22 +1707,25 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                         Text(
                                           'Their Day:',
                                           style: TextStyle(
-                                              fontWeight: FontWeight.w500),
+                                            fontWeight: FontWeight.w500,
+                                          ),
                                         ),
                                         SizedBox(height: 8),
                                         DropdownButtonFormField<String>(
                                           decoration: InputDecoration(
                                             prefixIcon: Icon(
-                                                Icons.calendar_today,
-                                                color: AppColors.primary),
+                                              Icons.calendar_today,
+                                              color: AppColors.primary,
+                                            ),
                                             border: OutlineInputBorder(
                                               borderRadius:
                                                   BorderRadius.circular(12),
                                             ),
                                             contentPadding:
                                                 EdgeInsets.symmetric(
-                                                    horizontal: 12,
-                                                    vertical: 8),
+                                              horizontal: 12,
+                                              vertical: 8,
+                                            ),
                                           ),
                                           value: _selectedDay2,
                                           hint: Text('Select their day'),
@@ -1741,13 +1733,15 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                               .expand((week) => week)
                                               .where((day) => !_freeDays.any(
                                                   (d) => d.date == day.date))
-                                              .map((day) =>
-                                                  DropdownMenuItem<String>(
-                                                    value:
-                                                        '${day.day}_${DateFormat('yyyy-MM-dd').format(day.date)}',
-                                                    child: Text(
-                                                        '${day.day} (${DateFormat('yyyy-MM-dd').format(day.date)})'),
-                                                  ))
+                                              .map(
+                                                (day) =>
+                                                    DropdownMenuItem<String>(
+                                                  value:
+                                                      '${day.day}_${DateFormat('yyyy-MM-dd').format(day.date)}',
+                                                  child: Text(
+                                                      '${day.day} (${DateFormat('yyyy-MM-dd').format(day.date)})'),
+                                                ),
+                                              )
                                               .toList(),
                                           onChanged: (value) {
                                             setState(() {
@@ -1778,7 +1772,8 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                       Card(
                         elevation: 8,
                         shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20)),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
                         color: Colors.white.withAlpha(243),
                         child: Padding(
                           padding: const EdgeInsets.all(20.0),
@@ -1787,8 +1782,11 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                             children: [
                               Row(
                                 children: [
-                                  Icon(Icons.info_outline,
-                                      color: AppColors.primary, size: 28),
+                                  Icon(
+                                    Icons.info_outline,
+                                    color: AppColors.primary,
+                                    size: 28,
+                                  ),
                                   SizedBox(width: 12),
                                   Text(
                                     'Schedule Information',
@@ -1849,7 +1847,8 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                       Card(
                         elevation: 8,
                         shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20)),
+                          borderRadius: BorderRadius.circular(20),
+                        ),
                         color: Colors.white.withAlpha(243),
                         child: Padding(
                           padding: const EdgeInsets.all(20.0),
@@ -1858,8 +1857,11 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                             children: [
                               Row(
                                 children: [
-                                  Icon(Icons.people_outline,
-                                      color: AppColors.primary, size: 28),
+                                  Icon(
+                                    Icons.people_outline,
+                                    color: AppColors.primary,
+                                    size: 28,
+                                  ),
                                   SizedBox(width: 12),
                                   Text(
                                     'Participants Status',
@@ -1885,7 +1887,6 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                           (_schedule!.availableDays.length *
                                               weeklyAvailableDays.length) *
                                           100;
-
                                   return Padding(
                                     padding:
                                         const EdgeInsets.only(bottom: 12.0),

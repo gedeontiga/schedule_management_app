@@ -34,32 +34,24 @@ void main() async {
     macOS: iosSettings,
     linux: linuxSettings,
   );
-  // try {
   await flutterLocalNotificationsPlugin.initialize(initializationSettings);
-  // } catch (e) {
-  //   print('Failed to initialize notifications: $e');
-  // }
 
   if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-    // try {
     sqfliteFfiInit();
     databaseFactory = databaseFactoryFfi;
-    // } catch (e) {}
   }
   await Hive.initFlutter();
   await Hive.openBox('offline_operations');
   await Hive.openBox('alarms');
   await dotenv.load(fileName: '.env.v2');
-  // try {
-  await SupabaseManager.initialize();
-  // } catch (e) {}
+  final dbManager = DbManagerService();
   final connectivityResult = await Connectivity().checkConnectivity();
   final isOffline = connectivityResult.contains(ConnectivityResult.none);
   if (isOffline) {
-    // try {
-    final dbManager = DbManagerService();
     await dbManager.initializeDatabases(isLocalOnly: true);
-    // } catch (e) {}
+  } else {
+    await SupabaseManager.initialize();
+    await dbManager.initializeDatabases();
   }
   runApp(const MyApp());
 }

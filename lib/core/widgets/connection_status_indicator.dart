@@ -1,7 +1,7 @@
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/material.dart';
-
 import '../constants/app_colors.dart';
+import 'dart:async';
 
 class ConnectionStatusIndicator extends StatefulWidget {
   const ConnectionStatusIndicator({super.key});
@@ -13,31 +13,39 @@ class ConnectionStatusIndicator extends StatefulWidget {
 
 class ConnectionStatusIndicatorState extends State<ConnectionStatusIndicator> {
   bool _isOffline = false;
-  late Stream<List<ConnectivityResult>> _connectivityStream;
+  StreamSubscription<List<ConnectivityResult>>? _connectivitySubscription;
 
   @override
   void initState() {
     super.initState();
-    _connectivityStream = Connectivity().onConnectivityChanged;
 
-    _connectivityStream.listen((List<ConnectivityResult> results) {
-      setState(() {
-        _isOffline =
-            results.isEmpty || results.contains(ConnectivityResult.none);
-      });
+    // Initial connectivity check
+    Connectivity().checkConnectivity().then((List<ConnectivityResult> results) {
+      if (mounted) {
+        setState(() {
+          _isOffline =
+              results.isEmpty || results.contains(ConnectivityResult.none);
+        });
+      }
     });
 
-    Connectivity().checkConnectivity().then((List<ConnectivityResult> results) {
-      setState(() {
-        _isOffline =
-            results.isEmpty || results.contains(ConnectivityResult.none);
-      });
+    // Listen for connectivity changes
+    _connectivitySubscription = Connectivity()
+        .onConnectivityChanged
+        .listen((List<ConnectivityResult> results) {
+      if (mounted) {
+        setState(() {
+          _isOffline =
+              results.isEmpty || results.contains(ConnectivityResult.none);
+        });
+      }
     });
   }
 
   @override
   Widget build(BuildContext context) {
     if (!_isOffline) return const SizedBox.shrink();
+
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 16),
       decoration: BoxDecoration(
@@ -67,6 +75,8 @@ class ConnectionStatusIndicatorState extends State<ConnectionStatusIndicator> {
 
   @override
   void dispose() {
+    // Cancel the subscription to prevent memory leaks
+    _connectivitySubscription?.cancel();
     super.dispose();
   }
 }

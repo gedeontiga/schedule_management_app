@@ -222,7 +222,7 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
       setState(() => _isLoading = false);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error adding participant: $error')),
+          SnackBar(content: Text('Error adding participant')),
         );
       }
     });
@@ -230,7 +230,6 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
 
   Future<void> _saveSchedule() async {
     if (!_formKey.currentState!.validate()) return;
-
     if (_selectedDays.every((selected) => !selected)) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Please select at least one day')),
@@ -238,10 +237,29 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
       return;
     }
 
-    setState(() => _isLoading = true);
+    // Validate time slots
+    for (int i = 0; i < _days.length; i++) {
+      if (_selectedDays[i]) {
+        final startTime = _startTimeControllers[i].text;
+        final endTime = _endTimeControllers[i].text;
+        final startParts = startTime.split(':').map(int.parse).toList();
+        final endParts = endTime.split(':').map(int.parse).toList();
+        final startMinutes = startParts[0] * 60 + startParts[1];
+        final endMinutes = endParts[0] * 60 + endParts[1];
 
+        if (startMinutes >= endMinutes) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+                content:
+                    Text('Start time must be before end time for ${_days[i]}')),
+          );
+          return;
+        }
+      }
+    }
+
+    setState(() => _isLoading = true);
     try {
-      // Create available days with time intervals
       final availableDays = <AvailableDay>[];
       for (int i = 0; i < _days.length; i++) {
         if (_selectedDays[i]) {
@@ -254,7 +272,6 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
       }
 
       final scheduleId = _isEditMode ? widget.schedule!.id : const Uuid().v4();
-
       final updatedParticipants = _participants.map((p) {
         final existingParticipant = _isEditMode
             ? widget.schedule!.participants.firstWhere(
@@ -262,7 +279,6 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
                 orElse: () => p,
               )
             : p;
-
         return Participant(
           userId: p.userId,
           scheduleId: scheduleId,
@@ -298,12 +314,9 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
       if (_isEditMode) {
         await _scheduleService.updateSchedule(schedule);
         await _scheduleService.syncParticipants(
-          scheduleId,
-          updatedParticipants,
-        );
+            scheduleId, updatedParticipants);
       } else {
         await _scheduleService.createSchedule(schedule);
-
         for (var participant in updatedParticipants) {
           if (participant.userId != SupabaseManager.getCurrentUserId()) {
             try {
@@ -418,8 +431,9 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
   Future<void> _selectDate(BuildContext context) async {
     final DateTime? picked = await showDatePicker(
       context: context,
-      initialDate: _startDate,
-      firstDate: DateTime.now().subtract(const Duration(days: 365)),
+      initialDate:
+          _startDate.isBefore(DateTime.now()) ? DateTime.now() : _startDate,
+      firstDate: DateTime.now(), // Changed to prevent selecting past dates
       lastDate: DateTime.now().add(const Duration(days: 365 * 2)),
       builder: (context, child) {
         return Theme(
@@ -441,7 +455,6 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
         _startDate = picked;
       });
 
-      // Show feedback to user
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

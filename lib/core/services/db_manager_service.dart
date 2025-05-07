@@ -5,7 +5,14 @@ class DbManagerService {
   static const String _localDbName = 'scheduling_app.db';
   Database? _localDb;
 
-  /// Initializes the local SQLite database.
+  static final DbManagerService _instance = DbManagerService._internal();
+
+  factory DbManagerService() {
+    return _instance;
+  }
+
+  DbManagerService._internal();
+
   Future<void> initializeLocalDatabase() async {
     try {
       final dbPath = await getDatabasesPath();
@@ -15,7 +22,6 @@ class DbManagerService {
         path,
         version: 2,
         onCreate: (db, version) async {
-          // Define table schemas for local storage
           const localSchemas = [
             '''CREATE TABLE IF NOT EXISTS schedules (
               id TEXT PRIMARY KEY,
@@ -54,13 +60,11 @@ class DbManagerService {
             );''',
           ];
 
-          // Execute each schema to create tables
           for (var schema in localSchemas) {
             await db.execute(schema);
           }
         },
         onUpgrade: (db, oldVersion, newVersion) async {
-          // Handle database schema upgrades
           if (oldVersion < 2) {
             await db
                 .execute('ALTER TABLE schedules ADD COLUMN start_date TEXT;');
@@ -75,20 +79,25 @@ class DbManagerService {
     }
   }
 
-  /// Initializes databases (currently only local).
   Future<void> initializeDatabases({bool isLocalOnly = false}) async {
-    await initializeLocalDatabase();
+    // Check if the database is already initialized
+    if (_localDb == null) {
+      await initializeLocalDatabase();
+    }
   }
 
-  /// Provides access to the local database instance.
   Database get localDatabase {
     if (_localDb == null) {
-      throw Exception('Local database not initialized or unavailable');
+      throw Exception(
+          'Local database not initialized or unavailable. Call initializeDatabases() first.');
     }
     return _localDb!;
   }
 
-  /// Closes the local database connection.
+  Future<bool> isLocalDatabaseInitialized() async {
+    return _localDb != null;
+  }
+
   Future<void> closeLocalDatabase() async {
     if (_localDb != null) {
       await _localDb!.close();

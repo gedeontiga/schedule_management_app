@@ -2,13 +2,14 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:scheduling_management_app/core/utils/supabase_manager.dart';
+import '../core/widgets/expandable_description.dart';
 import 'schedule_creation_screen.dart';
 import 'package:local_auth/local_auth.dart';
 import '../core/constants/app_colors.dart';
 import '../core/services/schedule_service.dart';
 import '../models/schedule.dart';
 import 'package:intl/intl.dart';
-import 'package:supabase_flutter/supabase_flutter.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -33,7 +34,7 @@ class HomeScreenState extends State<HomeScreen>
   @override
   void initState() {
     super.initState();
-    _currentUserId = Supabase.instance.client.auth.currentUser?.id;
+    _currentUserId = SupabaseManager.getCurrentUserId();
     _animationController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1000),
@@ -102,7 +103,6 @@ class HomeScreenState extends State<HomeScreen>
       return false;
     }
 
-    final completer = Completer<bool>();
     try {
       String localizedReason;
       final biometrics = await _auth.getAvailableBiometrics();
@@ -116,6 +116,8 @@ class HomeScreenState extends State<HomeScreen>
         localizedReason = 'Authenticate to access schedule details';
       }
 
+      await _auth.stopAuthentication();
+
       final authenticated = await _auth.authenticate(
         localizedReason: localizedReason,
         options: const AuthenticationOptions(
@@ -125,7 +127,11 @@ class HomeScreenState extends State<HomeScreen>
         ),
       );
 
-      completer.complete(authenticated);
+      if (authenticated) {
+        await _auth.stopAuthentication();
+        return true;
+      }
+      return false;
     } on PlatformException catch (e) {
       String errorMessage;
       switch (e.code) {
@@ -153,7 +159,7 @@ class HomeScreenState extends State<HomeScreen>
           ),
         );
       }
-      completer.complete(false);
+      return false;
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -163,10 +169,8 @@ class HomeScreenState extends State<HomeScreen>
           ),
         );
       }
-      completer.complete(false);
+      return false;
     }
-
-    return completer.future;
   }
 
   Future<void> _authenticateAndNavigate(String scheduleId) async {
@@ -176,7 +180,7 @@ class HomeScreenState extends State<HomeScreen>
 
     if (authenticated && mounted) {
       // Add a small delay to ensure the biometric dialog is dismissed
-      await Future.delayed(const Duration(milliseconds: 300));
+      await Future.delayed(const Duration(milliseconds: 200));
 
       if (mounted) {
         Navigator.pushNamed(context, '/manage-schedule', arguments: scheduleId);
@@ -239,7 +243,7 @@ class HomeScreenState extends State<HomeScreen>
         _isLoading = true;
         _isError = false;
       });
-      final userId = Supabase.instance.client.auth.currentUser?.id;
+      final userId = SupabaseManager.getCurrentUserId();
       if (userId == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -267,7 +271,7 @@ class HomeScreenState extends State<HomeScreen>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Error fetching schedules: $e'),
+            content: Text('Error fetching schedules'),
             behavior: SnackBarBehavior.floating,
             action: SnackBarAction(
               label: 'Retry',
@@ -389,15 +393,14 @@ class HomeScreenState extends State<HomeScreen>
                         'Scheduling App',
                         style: TextStyle(
                           fontSize:
-                              isLargeScreen ? 22 : 18, // Reduced from 28/24
+                              isLargeScreen ? 26 : 22, // Reduced from 28/24
                           fontWeight: FontWeight.w900,
                           color: AppColors.textOnPrimary,
                           shadows: [
                             BoxShadow(
                               blurRadius: 4, // Reduced from 6
-                              color: AppColors.textSecondary
-                                  .withValues(alpha: 0.6), // Less opacity
-                              offset: const Offset(1, 1), // Smaller offset
+                              color: AppColors.secondary.withValues(alpha: 0.8),
+                              offset: const Offset(2, 2), // Less opacity
                             ),
                           ],
                         ),
@@ -406,8 +409,8 @@ class HomeScreenState extends State<HomeScreen>
                         'Manage your schedules with ease',
                         style: TextStyle(
                           fontSize:
-                              isLargeScreen ? 14 : 12, // Reduced from 16/14
-                          color: AppColors.textOnPrimary,
+                              isLargeScreen ? 16 : 14, // Reduced from 16/14
+                          color: AppColors.secondary.withValues(alpha: 0.8),
                           fontWeight: FontWeight.w400,
                         ),
                       ),
@@ -569,7 +572,6 @@ class HomeScreenState extends State<HomeScreen>
       key: Key(schedule.id),
       direction: isOwner ? DismissDirection.horizontal : DismissDirection.none,
       confirmDismiss: (direction) async {
-        // Dismissible code remains the same
         if (direction == DismissDirection.endToStart) {
           final shouldDelete = await showDialog(
             context: context,
@@ -625,10 +627,10 @@ class HomeScreenState extends State<HomeScreen>
           return Transform.scale(
             scale: 0.95 + (_fadeAnimation.value * 0.05),
             child: Padding(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 8.0, vertical: 4.0), // Reduced vertical padding
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
               child: Card(
-                elevation: 4, // Reduced elevation
+                elevation: 3,
                 shadowColor: Colors.black.withValues(alpha: 0.15),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
@@ -651,19 +653,19 @@ class HomeScreenState extends State<HomeScreen>
                     splashColor: AppColors.primary.withValues(alpha: 0.2),
                     highlightColor: AppColors.primary.withValues(alpha: 0.1),
                     onTap: () => _authenticateAndNavigate(schedule.id),
-                    child: Padding(
-                      padding: const EdgeInsets.all(12.0), // Reduced padding
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisSize: MainAxisSize
-                            .min, // Add this to make the column take minimum required space
-                        children: [
-                          Row(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Header Row
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                          child: Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
+                              // Schedule Icon
                               Container(
-                                padding: const EdgeInsets.all(
-                                    6.0), // Reduced padding
+                                padding: const EdgeInsets.all(6.0),
                                 decoration: BoxDecoration(
                                   color:
                                       AppColors.primary.withValues(alpha: 0.1),
@@ -672,61 +674,39 @@ class HomeScreenState extends State<HomeScreen>
                                 child: Icon(
                                   Icons.schedule,
                                   color: AppColors.primary,
-                                  size: isLargeScreen ? 20 : 18, // Smaller icon
+                                  size: isLargeScreen ? 18 : 16,
                                 ),
                               ),
-                              const SizedBox(width: 8), // Reduced spacing
+                              const SizedBox(width: 8),
+
+                              // Title and Status
                               Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                child: Row(
                                   children: [
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            schedule.name,
-                                            style: TextStyle(
-                                              fontSize: isLargeScreen
-                                                  ? 16
-                                                  : 15, // Smaller font
-                                              fontWeight: FontWeight.w700,
-                                              color: AppColors.textPrimary,
-                                            ),
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            semanticsLabel: schedule.name,
-                                          ),
+                                    // Name
+                                    Expanded(
+                                      child: Text(
+                                        schedule.name,
+                                        style: TextStyle(
+                                          fontSize: isLargeScreen ? 16 : 15,
+                                          fontWeight: FontWeight.w700,
+                                          color: AppColors.textPrimary,
                                         ),
-                                        if (isOwner)
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(
-                                                horizontal: 6,
-                                                vertical: 2), // Smaller padding
-                                            decoration: BoxDecoration(
-                                              color: AppColors.primary
-                                                  .withValues(alpha: 0.2),
-                                              borderRadius:
-                                                  BorderRadius.circular(8),
-                                            ),
-                                            child: Text(
-                                              'Owner',
-                                              style: TextStyle(
-                                                fontSize: 10, // Smaller font
-                                                fontWeight: FontWeight.w600,
-                                                color: AppColors.primary,
-                                              ),
-                                            ),
-                                          ),
-                                      ],
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                        semanticsLabel: schedule.name,
+                                      ),
                                     ),
-                                    const SizedBox(
-                                        height: 4), // Reduced spacing
+
+                                    // Quick Info Row
                                     Row(
                                       children: [
+                                        // Status Tag
                                         Container(
                                           padding: const EdgeInsets.symmetric(
-                                              horizontal: 6,
-                                              vertical: 2), // Smaller padding
+                                            horizontal: 6,
+                                            vertical: 2,
+                                          ),
                                           decoration: BoxDecoration(
                                             color: statusColor.withValues(
                                                 alpha: 0.2),
@@ -744,23 +724,36 @@ class HomeScreenState extends State<HomeScreen>
                                                 : 'Draft',
                                             style: TextStyle(
                                               color: statusColor,
-                                              fontSize: isLargeScreen
-                                                  ? 11
-                                                  : 10, // Smaller font
+                                              fontSize: isLargeScreen ? 11 : 10,
                                               fontWeight: FontWeight.w600,
                                             ),
                                           ),
                                         ),
-                                        const SizedBox(width: 8),
-                                        Text(
-                                          'Created: ${DateFormat('dd-MM-yy').format(schedule.createdAt)}',
-                                          style: TextStyle(
-                                            fontSize: isLargeScreen
-                                                ? 11
-                                                : 10, // Smaller font
-                                            color: AppColors.textSecondary,
+
+                                        const SizedBox(width: 4),
+
+                                        // Owner Tag (if owner)
+                                        if (isOwner)
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(
+                                              horizontal: 6,
+                                              vertical: 2,
+                                            ),
+                                            decoration: BoxDecoration(
+                                              color: AppColors.primary
+                                                  .withValues(alpha: 0.2),
+                                              borderRadius:
+                                                  BorderRadius.circular(8),
+                                            ),
+                                            child: Text(
+                                              'Owner',
+                                              style: TextStyle(
+                                                fontSize: 10,
+                                                fontWeight: FontWeight.w600,
+                                                color: AppColors.primary,
+                                              ),
+                                            ),
                                           ),
-                                        ),
                                       ],
                                     ),
                                   ],
@@ -768,75 +761,85 @@ class HomeScreenState extends State<HomeScreen>
                               ),
                             ],
                           ),
-                          // Optional description - show only if available
-                          if (schedule.description != null &&
-                              schedule.description!.isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.only(
-                                  top: 8.0,
-                                  left: 6.0,
-                                  right: 6.0), // Reduced padding
-                              child: Text(
-                                schedule.description!,
-                                style: TextStyle(
-                                  fontSize:
-                                      isLargeScreen ? 13 : 12, // Smaller font
-                                  color: AppColors.textSecondary
-                                      .withValues(alpha: 0.8),
-                                ),
-                                maxLines: 1, // Reduced to 1 line
-                                overflow: TextOverflow.ellipsis,
-                                semanticsLabel: schedule.description,
-                              ),
-                            ),
-                          const SizedBox(height: 8), // Reduced spacing
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
+                        ),
+
+                        // Description section (expandable)
+                        if (schedule.description != null &&
+                            schedule.description!.isNotEmpty)
+                          ExpandableDescription(
+                            description: schedule.description!,
+                            isLargeScreen: isLargeScreen,
+                          ),
+
+                        // Bottom Action Bar
+                        Padding(
+                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              if (isOwner)
-                                TextButton.icon(
-                                  onPressed: () =>
-                                      _navigateToCreateSchedule(schedule),
-                                  icon: const Icon(Icons.edit,
-                                      size: 16), // Smaller icon
-                                  label: const Text('Edit',
-                                      style: TextStyle(
-                                          fontSize: 12)), // Smaller font
-                                  style: TextButton.styleFrom(
-                                    foregroundColor: AppColors.primary,
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 8,
-                                        vertical: 4), // Smaller padding
-                                    minimumSize: const Size(
-                                        0, 32), // Smaller minimum size
-                                  ),
+                              // Created Date
+                              Text(
+                                'Created: ${DateFormat('dd-MM-yy').format(schedule.createdAt)}',
+                                style: TextStyle(
+                                  fontSize: isLargeScreen ? 11 : 10,
+                                  color: AppColors.textSecondary,
                                 ),
-                              const SizedBox(width: 4), // Reduced spacing
-                              ElevatedButton.icon(
-                                onPressed: () =>
-                                    _authenticateAndNavigate(schedule.id),
-                                icon: const Icon(Icons.fingerprint,
-                                    size: 16), // Smaller icon
-                                label: const Text('View',
-                                    style: TextStyle(
-                                        fontSize: 12)), // Smaller font
-                                style: ElevatedButton.styleFrom(
-                                  backgroundColor: AppColors.secondary,
-                                  foregroundColor: AppColors.textOnPrimary,
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 12,
-                                      vertical: 4), // Smaller padding
-                                  minimumSize:
-                                      const Size(0, 32), // Smaller minimum size
-                                  shape: RoundedRectangleBorder(
-                                    borderRadius: BorderRadius.circular(8),
+                              ),
+
+                              // Action Buttons
+                              Row(
+                                children: [
+                                  // Edit Button (if owner)
+                                  if (isOwner)
+                                    TextButton.icon(
+                                      onPressed: () =>
+                                          _navigateToCreateSchedule(schedule),
+                                      icon: const Icon(Icons.edit, size: 14),
+                                      label: const Text(
+                                        'Edit',
+                                        style: TextStyle(fontSize: 12),
+                                      ),
+                                      style: TextButton.styleFrom(
+                                        foregroundColor: AppColors.primary,
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 8,
+                                          vertical: 4,
+                                        ),
+                                        minimumSize: const Size(0, 28),
+                                      ),
+                                    ),
+
+                                  const SizedBox(width: 4),
+
+                                  // View Button with Fingerprint
+                                  ElevatedButton.icon(
+                                    onPressed: () =>
+                                        _authenticateAndNavigate(schedule.id),
+                                    icon:
+                                        const Icon(Icons.fingerprint, size: 14),
+                                    label: const Text(
+                                      'View',
+                                      style: TextStyle(fontSize: 12),
+                                    ),
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: AppColors.secondary,
+                                      foregroundColor: AppColors.textOnPrimary,
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 12,
+                                        vertical: 4,
+                                      ),
+                                      minimumSize: const Size(0, 28),
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                    ),
                                   ),
-                                ),
+                                ],
                               ),
                             ],
                           ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
                 ),
@@ -849,44 +852,60 @@ class HomeScreenState extends State<HomeScreen>
   }
 
   Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+    return RefreshIndicator(
+      onRefresh: _fetchSchedules,
+      child: ListView(
+        // This ListView is needed for RefreshIndicator to work
+        physics: const AlwaysScrollableScrollPhysics(),
         children: [
-          TweenAnimationBuilder(
-            tween: Tween<double>(begin: 0.95, end: 1.0),
-            duration: const Duration(milliseconds: 1200),
-            curve: Curves.elasticOut,
-            builder: (context, scale, child) {
-              return Transform.scale(
-                scale: scale,
-                child: child,
-              );
-            },
-            child: Image.asset(
-              'assets/schedule_app_logo.png',
-              width: 120,
-              height: 120,
-              opacity: const AlwaysStoppedAnimation(0.8),
+          SizedBox(
+            height: MediaQuery.of(context).size.height *
+                0.7, // Take up enough space for refresh to work
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  TweenAnimationBuilder(
+                    tween: Tween<double>(begin: 0.95, end: 1.0),
+                    duration: const Duration(milliseconds: 1200),
+                    curve: Curves.elasticOut,
+                    builder: (context, scale, child) {
+                      return Transform.scale(
+                        scale: scale,
+                        child: child,
+                      );
+                    },
+                    child: Image.asset(
+                      'assets/schedule_app_logo.png',
+                      width: 120,
+                      height: 120,
+                      opacity: const AlwaysStoppedAnimation(0.8),
+                    ),
+                  ),
+                  const SizedBox(height: 24),
+                  Text(
+                    'No schedules yet!',
+                    style: TextStyle(
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold,
+                      color: AppColors.secondary,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    child: Text(
+                      'Create your first schedule to get started or refresh screen if already done',
+                      style: TextStyle(
+                        fontSize: 16,
+                        color: AppColors.textOnPrimary.withValues(alpha: 0.7),
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  )
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 24),
-          Text(
-            'No schedules yet!',
-            style: TextStyle(
-              fontSize: 22,
-              fontWeight: FontWeight.bold,
-              color: Colors.purple,
-            ),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'Create your first schedule to get started',
-            style: TextStyle(
-              fontSize: 16,
-              color: Colors.purple,
-            ),
-            textAlign: TextAlign.center,
           ),
         ],
       ),
