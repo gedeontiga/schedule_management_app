@@ -16,7 +16,6 @@ dependencies:
   connectivity_plus: ^6.1.3
   flutter_bloc: ^9.1.0
   equatable: ^2.0.7
-  supabase_flutter: ^2.8.4
   shared_preferences: ^2.5.2
   sqflite: ^2.4.2
   sqflite_common_ffi: ^2.3.5
@@ -36,6 +35,13 @@ dependencies:
   google_fonts: ^6.2.1
   flutter_dotenv: ^5.0.0
   table_calendar: ^3.0.8
+  firebase_core: ^4.1.1
+  provider: ^6.1.5+1
+  cloud_firestore: ^6.0.2
+  firebase_auth: ^6.1.0
+  google_sign_in: ^7.2.0
+  cloud_functions: ^6.0.2
+  firebase_storage: ^13.0.2
 
 dev_dependencies:
   flutter_test:
@@ -47,8 +53,8 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - .env.v2
-    - assets/schedule_app_logo.png
+    # - .env.v2
+    - assets/schedulo_logo.png
     - assets/fonts/Oswald-Bold.ttf
     - assets/fonts/Oswald-Regular.ttf
     - assets/fonts/Oswald-Light.ttf
@@ -61,12 +67,12 @@ flutter_launcher_icons:
   linux: true
   windows:
     generate: true
-    image_path: "assets/schedule_app_logo.png"
+    image_path: "assets/schedulo_logo.png"
   web:
     generate: true
-    image_path: "assets/schedule_app_logo.png"
-    background_color: "#3366C2"
-    theme_color: "#3366C2"
-  image_path: "assets/schedule_app_logo.png"
-  adaptive_icon_background: "#3366C2"
-  adaptive_icon_foreground: "assets/schedule_app_logo.png"
+    image_path: "assets/schedulo_logo.png"
+    background_color: "#FB707E"
+    theme_color: "#FB707E"
+  image_path: "assets/schedulo_logo.png"
+  adaptive_icon_background: "#FB707E"
+  adaptive_icon_foreground: "assets/schedulo_logo.png"

@@ -6,12 +6,12 @@ import 'package:hive/hive.dart';
 import 'package:intl/intl.dart';
 import 'package:open_file/open_file.dart';
 import 'package:permission_handler/permission_handler.dart';
-import 'package:scheduling_management_app/core/utils/supabase_manager.dart';
 import 'package:uuid/uuid.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
 import '../core/constants/app_colors.dart';
 import '../core/services/permission_service.dart';
+import '../core/utils/firebase_manager.dart';
 import '../core/widgets/calendar_view.dart';
 import '../models/time_slot.dart';
 import '../core/widgets/gradient_button.dart';
@@ -60,31 +60,6 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
   @override
   void initState() {
     super.initState();
-    _scheduleService.permutationRequestStream.listen((payload) async {
-      if (payload['eventType'] == 'UPDATE' &&
-          payload['new']['status'] == 'accepted') {
-        await _fetchSchedule();
-      }
-      if (payload['eventType'] == 'INSERT' &&
-          payload['new']['receiver_id'] == SupabaseManager.getCurrentUserId() &&
-          payload['new']['schedule_id'] == _scheduleId) {
-        await _fetchPendingPermutationRequests();
-      }
-    });
-    _scheduleService.notificationStream.listen((payload) {
-      if (payload['type'] == 'free_days_updated' &&
-          payload['data']['schedule_id'] == _scheduleId) {
-        _fetchSchedule();
-      }
-      if (payload['type'] == 'schedule_status_updated' &&
-          payload['data']['schedule_id'] == _scheduleId) {
-        _fetchSchedule();
-      }
-      if (payload['type'] == 'permutation_request' &&
-          payload['data']['schedule_id'] == _scheduleId) {
-        _fetchPendingPermutationRequests();
-      }
-    });
   }
 
   @override
@@ -101,15 +76,21 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
   Future<void> _updateFreeDays() async {
     setState(() => _isLoading = true);
     try {
-      if (!await _scheduleService.validateFreeDays(
-          _schedule!.id, SupabaseManager.getCurrentUserId()!, _freeDays)) {
+      // Validation is now async in Firebase version
+      final isValid = await _scheduleService.validateFreeDays(
+        _schedule!.id,
+        FirebaseManager.currentUserId!,
+        _freeDays,
+      );
+
+      if (!isValid) {
         throw Exception('Selected days are not available or already taken');
       }
 
       await _scheduleService.updateFreeDays(
-        _schedule!.id,
-        SupabaseManager.getCurrentUserId()!,
-        _freeDays,
+        scheduleId: _schedule!.id,
+        userId: FirebaseManager.currentUserId!,
+        freeDays: _freeDays,
       );
 
       if (mounted) {
@@ -134,15 +115,16 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
     try {
       final request = PermutationRequest(
         id: const Uuid().v4(),
-        senderId: SupabaseManager.getCurrentUserId()!,
+        senderId: FirebaseManager.currentUserId!,
         receiverId: _schedule!.participants
-            .firstWhere((p) => p.userId != SupabaseManager.getCurrentUserId()!)
+            .firstWhere((p) => p.userId != FirebaseManager.currentUserId!)
             .userId,
         scheduleId: _schedule!.id,
         senderDay: _selectedDay1!,
         receiverDay: _selectedDay2!,
       );
       await _notificationService.sendPermutationRequest(request);
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Permutation request sent')),
@@ -191,7 +173,7 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
         final receiverDayDate = DateTime.parse(receiverDayParts[1]);
 
         final currentUser = _participants.firstWhere(
-          (p) => p.userId == SupabaseManager.getCurrentUserId()!,
+          (p) => p.userId == FirebaseManager.currentUserId!,
           orElse: () => throw Exception('Current user not found'),
         );
         final requester = _participants.firstWhere(
@@ -226,14 +208,14 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
           ..add(myDayToGive);
 
         await _scheduleService.updateFreeDays(
-          scheduleId,
-          SupabaseManager.getCurrentUserId()!,
-          myNewFreeDays,
+          scheduleId: scheduleId,
+          userId: FirebaseManager.currentUserId!,
+          freeDays: myNewFreeDays,
         );
         await _scheduleService.updateFreeDays(
-          scheduleId,
-          senderId,
-          theirNewFreeDays,
+          scheduleId: scheduleId,
+          userId: senderId,
+          freeDays: theirNewFreeDays,
         );
       }
 
@@ -256,17 +238,21 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
 
   Future<void> _fetchPendingPermutationRequests() async {
     try {
-      final userId = SupabaseManager.getCurrentUserId();
+      final userId = FirebaseManager.currentUserId;
       if (userId == null || _scheduleId == null) return;
-      final requests = await _scheduleService.supabase
-          .from('permutation_requests')
-          .select()
-          .eq('receiver_id', userId)
-          .eq('schedule_id', _scheduleId!)
-          .eq('status', 'pending');
+
+      // Replace Supabase query with Firebase:
+      final snapshot = await FirebaseManager.firestore
+          .collection('permutation_requests')
+          .where('receiver_id', isEqualTo: userId)
+          .where('schedule_id', isEqualTo: _scheduleId!)
+          .where('status', isEqualTo: 'pending')
+          .get();
 
       setState(() {
-        _pendingPermutationRequests = List<Map<String, dynamic>>.from(requests);
+        _pendingPermutationRequests =
+            snapshot.docs.map((doc) => {...doc.data(), 'id': doc.id}).toList();
+
         if (_pendingPermutationRequests.isNotEmpty &&
             !_showPermutationRequestPopup) {
           _currentPermutationRequest = _pendingPermutationRequests.first;
@@ -279,7 +265,7 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
         }
       });
     } catch (e) {
-      // Log error silently
+      // Handle error
     }
   }
 
@@ -564,16 +550,16 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
 
     final weeklyDays = <List<FreeDay>>[];
     final otherParticipantsTakenDates = _participants
-        .where((p) => p.userId != SupabaseManager.getCurrentUserId())
+        .where((p) => p.userId != FirebaseManager.currentUserId)
         .expand((p) => p.freeDays)
         .map((d) => DateTime(d.date.year, d.date.month, d.date.day))
         .toSet();
 
     final currentUserFreeDays = _participants
         .firstWhere(
-          (p) => p.userId == SupabaseManager.getCurrentUserId(),
+          (p) => p.userId == FirebaseManager.currentUserId,
           orElse: () => Participant(
-            userId: SupabaseManager.getCurrentUserId()!,
+            userId: FirebaseManager.currentUserId!,
             scheduleId: _scheduleId!,
             roles: [],
             freeDays: [],
@@ -1092,36 +1078,34 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
   Future<void> _fetchSchedule() async {
     setState(() => _isLoading = true);
     try {
-      final schedules = await _scheduleService
-          .getUserSchedules(SupabaseManager.getCurrentUserId()!)
-          .timeout(const Duration(seconds: 5));
-      if (schedules.isEmpty) {
-        throw Exception('No schedules found for this user');
-      }
-      _schedule = schedules.firstWhere((s) => s.id == _scheduleId,
-          orElse: () =>
-              throw Exception('Schedule with ID $_scheduleId not found'));
-      final currentParticipant = _schedule!.participants
-          .firstWhere((p) => p.userId == SupabaseManager.getCurrentUserId()!);
-      _freeDays = currentParticipant.freeDays;
-      _participants = _schedule!.participants;
-
-      // Cancel existing subscriptions safely using null-aware operator
-      _participantSubscription?.cancel();
+      // Use stream instead of one-time fetch
       _scheduleSubscription?.cancel();
+      _participantSubscription?.cancel();
 
-      _participantSubscription = _scheduleService
-          .getParticipantStream(_scheduleId!)
-          .listen((participants) {
+      // Get schedule stream
+      _scheduleSubscription =
+          _scheduleService.getSchedule(_scheduleId!).listen((schedule) {
+        setState(() {
+          _schedule = schedule;
+          _availableWeeklyDays = _getWeeklyAvailableDays();
+          _calculateAvailableTimeSlots();
+        });
+      });
+
+      // Get participants stream
+      _participantSubscription =
+          _scheduleService.getParticipants(_scheduleId!).listen((participants) {
         setState(() {
           _participants = participants;
           final currentUser = participants.firstWhere(
-              (p) => p.userId == SupabaseManager.getCurrentUserId()!,
-              orElse: () => Participant(
-                  userId: SupabaseManager.getCurrentUserId()!,
-                  scheduleId: _scheduleId!,
-                  roles: [],
-                  freeDays: []));
+            (p) => p.userId == FirebaseManager.currentUserId!,
+            orElse: () => Participant(
+              userId: FirebaseManager.currentUserId!,
+              scheduleId: _scheduleId!,
+              roles: [],
+              freeDays: [],
+            ),
+          );
           _freeDays = currentUser.freeDays;
           if (_schedule != null) {
             _schedule = _schedule!.copyWith(participants: participants);
@@ -1131,34 +1115,15 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
         });
       });
 
-      _scheduleSubscription =
-          _scheduleService.getScheduleStream(_scheduleId!).listen((schedule) {
-        setState(() {
-          _schedule = schedule;
-          _availableWeeklyDays = _getWeeklyAvailableDays();
-          _calculateAvailableTimeSlots();
-        });
-      });
-
-      _scheduleService.notificationStream.listen((payload) {
-        if (payload['type'] == 'free_days_updated' &&
-            payload['data']['schedule_id'] == _scheduleId) {
-          setState(() {
-            _availableWeeklyDays = _getWeeklyAvailableDays();
-            _calculateAvailableTimeSlots();
-          });
-        }
-      });
-
       final alarmBox = Hive.box('alarms');
       _alarms.addAll(alarmBox.toMap().cast<String, String>());
-      _availableWeeklyDays = _getWeeklyAvailableDays();
-      _calculateAvailableTimeSlots();
+
       await _fetchPendingPermutationRequests();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error loading schedule: $e')));
+          SnackBar(content: Text('Error loading schedule: $e')),
+        );
         Navigator.pop(context);
       }
     } finally {
@@ -1670,7 +1635,7 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                               vertical: 8,
                                             ),
                                           ),
-                                          value: _selectedDay1,
+                                          initialValue: _selectedDay1,
                                           hint: Text('Select your day'),
                                           items: _freeDays
                                               .map(
@@ -1727,7 +1692,7 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                               vertical: 8,
                                             ),
                                           ),
-                                          value: _selectedDay2,
+                                          initialValue: _selectedDay2,
                                           hint: Text('Select their day'),
                                           items: weeklyAvailableDays
                                               .expand((week) => week)
@@ -1881,7 +1846,7 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                 itemBuilder: (context, index) {
                                   final participant = _participants[index];
                                   final isCurrentUser = participant.userId ==
-                                      SupabaseManager.getCurrentUserId();
+                                      FirebaseManager.currentUserId;
                                   final completionPercentage =
                                       participant.freeDays.length /
                                           (_schedule!.availableDays.length *

@@ -6,7 +6,7 @@ import '../../models/free_day.dart';
 import '../../models/participant.dart';
 import '../../models/schedule.dart';
 import '../constants/app_colors.dart';
-import '../utils/supabase_manager.dart';
+import '../utils/firebase_manager.dart';
 
 class CalendarView extends StatelessWidget {
   final Schedule schedule;
@@ -235,7 +235,7 @@ class CalendarView extends StatelessWidget {
     }
 
     for (var participant in participants) {
-      if (participant.userId != SupabaseManager.getCurrentUserId()) {
+      if (participant.userId != FirebaseManager.currentUserId) {
         for (var day in participant.freeDays) {
           final date = DateTime(day.date.year, day.date.month, day.date.day);
           if (events.containsKey(date)) {

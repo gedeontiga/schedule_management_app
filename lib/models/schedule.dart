@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'available_day.dart';
 import 'participant.dart';
 
@@ -36,8 +37,8 @@ class Schedule {
       'owner_id': ownerId,
       'participants': participants.map((p) => p.toJson()).toList(),
       'is_fully_set': isFullySet,
-      'created_at': createdAt.toIso8601String(),
-      'start_date': startDate.toIso8601String(),
+      'created_at': Timestamp.fromDate(createdAt),
+      'start_date': Timestamp.fromDate(startDate),
     };
   }
 
@@ -56,8 +57,8 @@ class Schedule {
               .toList() ??
           [],
       isFullySet: json['is_fully_set'],
-      createdAt: DateTime.parse(json['created_at']),
-      startDate: DateTime.parse(json['start_date']),
+      createdAt: (json['created_at'] as Timestamp).toDate(),
+      startDate: (json['start_date'] as Timestamp).toDate(),
     );
   }
 

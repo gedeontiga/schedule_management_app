@@ -2,7 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:scheduling_management_app/core/utils/supabase_manager.dart';
+import '../core/utils/firebase_manager.dart';
 import '../core/widgets/expandable_description.dart';
 import 'schedule_creation_screen.dart';
 import 'package:local_auth/local_auth.dart';
@@ -31,24 +31,18 @@ class HomeScreenState extends State<HomeScreen>
   late StreamSubscription<List<Schedule>> _scheduleSubscription;
   bool _canUseBiometrics = false;
 
-  @override
-  void initState() {
-    super.initState();
-    _currentUserId = SupabaseManager.getCurrentUserId();
-    _animationController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1000),
-    );
-    _fadeAnimation =
-        CurvedAnimation(parent: _animationController, curve: Curves.easeInOut);
-    _animationController.forward();
+  void _initializeScheduleStream() {
+    final userId = FirebaseManager.currentUserId;
+    if (userId == null) {
+      setState(() {
+        _isLoading = false;
+        _isError = true;
+        _errorMessage = 'User not logged in';
+      });
+      return;
+    }
 
-    setState(() {
-      _isLoading = true;
-      _isError = false;
-    });
-
-    _scheduleSubscription = _scheduleService.scheduleStream.listen(
+    _scheduleSubscription = _scheduleService.getUserSchedules(userId).listen(
       (schedules) {
         if (mounted) {
           setState(() {
@@ -68,8 +62,28 @@ class HomeScreenState extends State<HomeScreen>
         }
       },
     );
+  }
 
-    _fetchSchedules();
+  @override
+  void initState() {
+    super.initState();
+    _currentUserId = FirebaseManager.currentUserId;
+    _animationController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 1000),
+    );
+    _fadeAnimation = CurvedAnimation(
+      parent: _animationController,
+      curve: Curves.easeInOut,
+    );
+    _animationController.forward();
+
+    setState(() {
+      _isLoading = true;
+      _isError = false;
+    });
+
+    _initializeScheduleStream();
     _checkBiometricAvailability();
   }
 
@@ -179,7 +193,6 @@ class HomeScreenState extends State<HomeScreen>
     final authenticated = await _authenticateWithBiometrics(context);
 
     if (authenticated && mounted) {
-      // Add a small delay to ensure the biometric dialog is dismissed
       await Future.delayed(const Duration(milliseconds: 200));
 
       if (mounted) {
@@ -190,33 +203,18 @@ class HomeScreenState extends State<HomeScreen>
 
   Future<void> _deleteSchedule(Schedule schedule) async {
     try {
-      final result = await _scheduleService.deleteSchedule(schedule.id);
-      if (result) {
-        if (mounted) {
-          setState(() {
-            _schedules.removeWhere((s) => s.id == schedule.id);
-          });
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('${schedule.name} deleted successfully'),
-              behavior: SnackBarBehavior.floating,
-              duration: const Duration(seconds: 2),
-            ),
-          );
-        }
-      } else {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('Failed to delete ${schedule.name}'),
-              behavior: SnackBarBehavior.floating,
-              action: SnackBarAction(
-                label: 'Retry',
-                onPressed: () => _deleteSchedule(schedule),
-              ),
-            ),
-          );
-        }
+      await _scheduleService
+          .deleteSchedule(schedule.id); // No return value needed
+
+      if (mounted) {
+        // The stream will automatically update the list
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${schedule.name} deleted successfully'),
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 2),
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
@@ -224,6 +222,10 @@ class HomeScreenState extends State<HomeScreen>
           SnackBar(
             content: Text('Error: ${e.toString()}'),
             behavior: SnackBarBehavior.floating,
+            action: SnackBarAction(
+              label: 'Retry',
+              onPressed: () => _deleteSchedule(schedule),
+            ),
           ),
         );
       }
@@ -234,6 +236,7 @@ class HomeScreenState extends State<HomeScreen>
   void dispose() {
     _animationController.dispose();
     _scheduleSubscription.cancel();
+    _scheduleService.dispose(); // Add this to clean up connectivity listener
     super.dispose();
   }
 
@@ -243,7 +246,9 @@ class HomeScreenState extends State<HomeScreen>
         _isLoading = true;
         _isError = false;
       });
-      final userId = SupabaseManager.getCurrentUserId();
+
+      final userId = FirebaseManager.currentUserId; // Changed
+
       if (userId == null) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -260,13 +265,40 @@ class HomeScreenState extends State<HomeScreen>
         });
         return;
       }
-      final schedules = await _scheduleService.getUserSchedules(userId);
-      if (mounted) {
-        setState(() {
-          _schedules = schedules;
-          _isLoading = false;
-        });
-      }
+
+      // Cancel existing subscription
+      await _scheduleSubscription.cancel();
+
+      // Re-subscribe to the stream
+      _scheduleSubscription = _scheduleService.getUserSchedules(userId).listen(
+        (schedules) {
+          if (mounted) {
+            setState(() {
+              _schedules = schedules;
+              _isLoading = false;
+            });
+          }
+        },
+        onError: (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text('Error fetching schedules'),
+                behavior: SnackBarBehavior.floating,
+                action: SnackBarAction(
+                  label: 'Retry',
+                  onPressed: _fetchSchedules,
+                ),
+              ),
+            );
+            setState(() {
+              _isLoading = false;
+              _isError = true;
+              _errorMessage = e.toString();
+            });
+          }
+        },
+      );
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -362,45 +394,40 @@ class HomeScreenState extends State<HomeScreen>
     return Padding(
       padding: EdgeInsets.symmetric(
         horizontal: isLargeScreen ? 24.0 : 16.0,
-        vertical: 12.0, // Reduced from 24.0
+        vertical: 12.0,
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Using Row instead of Column for horizontal layout when space is tight
           Expanded(
             child: Row(
               children: [
-                // App logo in smaller screens
                 if (!isLargeScreen)
                   Padding(
                     padding: const EdgeInsets.only(right: 10.0),
                     child: CircleAvatar(
-                      radius: 18, // Smaller radius
+                      radius: 18,
                       backgroundImage:
-                          const AssetImage('assets/schedule_app_logo.png'),
+                          const AssetImage('assets/schedulo_logo.png'),
                       backgroundColor: AppColors.primary.withValues(alpha: 0.2),
                     ),
                   ),
-
-                // Title and subtitle
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
-                    mainAxisSize: MainAxisSize.min, // Take minimum space
+                    mainAxisSize: MainAxisSize.min,
                     children: [
                       Text(
-                        'Scheduling App',
+                        'Schedulo',
                         style: TextStyle(
-                          fontSize:
-                              isLargeScreen ? 26 : 22, // Reduced from 28/24
+                          fontSize: isLargeScreen ? 26 : 22,
                           fontWeight: FontWeight.w900,
                           color: AppColors.textOnPrimary,
                           shadows: [
                             BoxShadow(
-                              blurRadius: 4, // Reduced from 6
+                              blurRadius: 4,
                               color: AppColors.secondary.withValues(alpha: 0.8),
-                              offset: const Offset(2, 2), // Less opacity
+                              offset: const Offset(2, 2),
                             ),
                           ],
                         ),
@@ -408,8 +435,7 @@ class HomeScreenState extends State<HomeScreen>
                       Text(
                         'Manage your schedules with ease',
                         style: TextStyle(
-                          fontSize:
-                              isLargeScreen ? 16 : 14, // Reduced from 16/14
+                          fontSize: isLargeScreen ? 16 : 14,
                           color: AppColors.secondary.withValues(alpha: 0.8),
                           fontWeight: FontWeight.w400,
                         ),
@@ -420,12 +446,10 @@ class HomeScreenState extends State<HomeScreen>
               ],
             ),
           ),
-
-          // Only show logo on right side in large screens
           if (isLargeScreen)
             CircleAvatar(
-              radius: 24, // Reduced from 32
-              backgroundImage: const AssetImage('assets/schedule_app_logo.png'),
+              radius: 24,
+              backgroundImage: const AssetImage('assets/schedulo_logo.png'),
               backgroundColor: AppColors.primary.withValues(alpha: 0.2),
             ),
         ],
@@ -657,13 +681,11 @@ class HomeScreenState extends State<HomeScreen>
                       crossAxisAlignment: CrossAxisAlignment.start,
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        // Header Row
                         Padding(
                           padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
                           child: Row(
                             crossAxisAlignment: CrossAxisAlignment.center,
                             children: [
-                              // Schedule Icon
                               Container(
                                 padding: const EdgeInsets.all(6.0),
                                 decoration: BoxDecoration(
@@ -678,12 +700,9 @@ class HomeScreenState extends State<HomeScreen>
                                 ),
                               ),
                               const SizedBox(width: 8),
-
-                              // Title and Status
                               Expanded(
                                 child: Row(
                                   children: [
-                                    // Name
                                     Expanded(
                                       child: Text(
                                         schedule.name,
@@ -697,11 +716,8 @@ class HomeScreenState extends State<HomeScreen>
                                         semanticsLabel: schedule.name,
                                       ),
                                     ),
-
-                                    // Quick Info Row
                                     Row(
                                       children: [
-                                        // Status Tag
                                         Container(
                                           padding: const EdgeInsets.symmetric(
                                             horizontal: 6,
@@ -729,10 +745,7 @@ class HomeScreenState extends State<HomeScreen>
                                             ),
                                           ),
                                         ),
-
                                         const SizedBox(width: 4),
-
-                                        // Owner Tag (if owner)
                                         if (isOwner)
                                           Container(
                                             padding: const EdgeInsets.symmetric(
@@ -762,22 +775,17 @@ class HomeScreenState extends State<HomeScreen>
                             ],
                           ),
                         ),
-
-                        // Description section (expandable)
                         if (schedule.description != null &&
                             schedule.description!.isNotEmpty)
                           ExpandableDescription(
                             description: schedule.description!,
                             isLargeScreen: isLargeScreen,
                           ),
-
-                        // Bottom Action Bar
                         Padding(
                           padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
                           child: Row(
                             mainAxisAlignment: MainAxisAlignment.spaceBetween,
                             children: [
-                              // Created Date
                               Text(
                                 'Created: ${DateFormat('dd-MM-yy').format(schedule.createdAt)}',
                                 style: TextStyle(
@@ -785,11 +793,8 @@ class HomeScreenState extends State<HomeScreen>
                                   color: AppColors.textSecondary,
                                 ),
                               ),
-
-                              // Action Buttons
                               Row(
                                 children: [
-                                  // Edit Button (if owner)
                                   if (isOwner)
                                     TextButton.icon(
                                       onPressed: () =>
@@ -808,10 +813,7 @@ class HomeScreenState extends State<HomeScreen>
                                         minimumSize: const Size(0, 28),
                                       ),
                                     ),
-
                                   const SizedBox(width: 4),
-
-                                  // View Button with Fingerprint
                                   ElevatedButton.icon(
                                     onPressed: () =>
                                         _authenticateAndNavigate(schedule.id),
@@ -855,12 +857,10 @@ class HomeScreenState extends State<HomeScreen>
     return RefreshIndicator(
       onRefresh: _fetchSchedules,
       child: ListView(
-        // This ListView is needed for RefreshIndicator to work
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
           SizedBox(
-            height: MediaQuery.of(context).size.height *
-                0.7, // Take up enough space for refresh to work
+            height: MediaQuery.of(context).size.height * 0.7,
             child: Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
@@ -876,7 +876,7 @@ class HomeScreenState extends State<HomeScreen>
                       );
                     },
                     child: Image.asset(
-                      'assets/schedule_app_logo.png',
+                      'assets/schedulo_logo.png',
                       width: 120,
                       height: 120,
                       opacity: const AlwaysStoppedAnimation(0.8),

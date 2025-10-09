@@ -12,7 +12,8 @@
 .swiftpm/
 migrate_working_dir/
 assets/**
-!assets/schedule_app_logo.png
+!assets/schedulo_logo.png
+lib/firebase_options.dart
 
 # IntelliJ related
 *.iml
@@ -47,3 +48,7 @@ app.*.map.json
 /android/app/release
 
 .env*
+
+/android/app/google**
+/ios/Runner/Google**
+firebase.json

@@ -6,7 +6,7 @@ import '../core/widgets/custom_text_field.dart';
 import '../core/widgets/gradient_button.dart';
 import '../core/services/schedule_service.dart';
 import '../core/services/notification_service.dart';
-import '../core/utils/supabase_manager.dart';
+import '../core/utils/firebase_manager.dart';
 import '../models/available_day.dart';
 import '../models/schedule.dart';
 import '../models/participant.dart';
@@ -123,12 +123,14 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
   Future<String?> _findUserId(String input) async {
     final normalizedInput = input.trim().toLowerCase();
     try {
-      final response = await SupabaseManager.client
-          .from('user_profiles')
-          .select('id, email')
-          .eq('email', normalizedInput)
-          .single();
-      return response['id'];
+      final querySnapshot = await FirebaseManager.firestore
+          .collection('users') // or your Firebase users collection name
+          .where('email', isEqualTo: normalizedInput)
+          .limit(1)
+          .get();
+
+      if (querySnapshot.docs.isEmpty) return null;
+      return querySnapshot.docs.first.id;
     } catch (e) {
       return null;
     }
@@ -136,12 +138,13 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
 
   Future<String?> _findUsername(String userId) async {
     try {
-      final response = await SupabaseManager.client
-          .from('user_details')
-          .select('id, username')
-          .eq('id', userId)
-          .single();
-      return response['username'];
+      final doc = await FirebaseManager.firestore
+          .collection('users') // or your Firebase users collection name
+          .doc(userId)
+          .get();
+
+      if (!doc.exists) return null;
+      return doc.data()?['username'] as String?;
     } catch (e) {
       return null;
     }
@@ -289,7 +292,7 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
 
       if (!_isEditMode) {
         updatedParticipants.add(Participant(
-          userId: SupabaseManager.getCurrentUserId()!,
+          userId: FirebaseManager.currentUserId!,
           scheduleId: scheduleId,
           roles: [Role(name: 'Owner')],
           freeDays: [],
@@ -304,7 +307,7 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
             : _descriptionController.text,
         availableDays: availableDays,
         duration: _selectedDuration!,
-        ownerId: SupabaseManager.getCurrentUserId()!,
+        ownerId: FirebaseManager.currentUserId!,
         participants: updatedParticipants,
         isFullySet: _isEditMode ? widget.schedule!.isFullySet : false,
         createdAt: _isEditMode ? widget.schedule!.createdAt : DateTime.now(),
@@ -318,7 +321,7 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
       } else {
         await _scheduleService.createSchedule(schedule);
         for (var participant in updatedParticipants) {
-          if (participant.userId != SupabaseManager.getCurrentUserId()) {
+          if (participant.userId != FirebaseManager.currentUserId) {
             try {
               await _notificationService.sendInvitation(
                 schedule.id,
@@ -766,7 +769,7 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen> {
                                                   BorderRadius.circular(12),
                                             ),
                                           ),
-                                          value: _selectedDuration,
+                                          initialValue: _selectedDuration,
                                           items: _durations
                                               .map((duration) =>
                                                   DropdownMenuItem(
