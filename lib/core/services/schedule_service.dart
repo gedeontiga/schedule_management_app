@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 import '../../models/schedule.dart';
 import '../../models/participant.dart';
@@ -297,7 +298,10 @@ class ScheduleService {
   ) async {
     try {
       final scheduleDoc = await _schedulesCollection.doc(scheduleId).get();
-      if (!scheduleDoc.exists) return false;
+      if (!scheduleDoc.exists) {
+        debugPrint('Schedule not found');
+        return false;
+      }
 
       final schedule = Schedule.fromJson({
         ...scheduleDoc.data()!,
@@ -310,36 +314,85 @@ class ScheduleService {
         schedule.duration,
       );
 
+      debugPrint('Valid dates: ${validDates.length}');
+      debugPrint('New free days: ${newFreeDays.length}');
+
       for (var freeDay in newFreeDays) {
-        if (!validDates.any((date) =>
+        // Check if date is in valid range
+        final dateIsValid = validDates.any((date) =>
             date.year == freeDay.date.year &&
             date.month == freeDay.date.month &&
-            date.day == freeDay.date.day)) {
+            date.day == freeDay.date.day);
+
+        if (!dateIsValid) {
+          debugPrint('Date ${freeDay.date} is not in valid schedule dates');
           return false;
         }
 
-        final availableDay = schedule.availableDays.firstWhere(
+        // Check if day name matches available days
+        final availableDayMatch = schedule.availableDays.firstWhere(
           (d) => d.day == freeDay.day,
-          orElse: () => throw Exception('Day not found in available days'),
+          orElse: () => null as dynamic,
         );
 
-        if (!_isTimeSlotValid(
+        // Check if time slot is within available hours
+        final timeSlotValid = _isTimeSlotValid(
           freeDay.startTime,
           freeDay.endTime,
-          availableDay.startTime,
-          availableDay.endTime,
-        )) {
+          availableDayMatch.startTime,
+          availableDayMatch.endTime,
+        );
+
+        if (!timeSlotValid) {
+          debugPrint(
+              'Time slot ${freeDay.startTime}-${freeDay.endTime} not valid for ${availableDayMatch.startTime}-${availableDayMatch.endTime}');
           return false;
         }
       }
 
-      final participants = await _participantsCollection
+      // Get ALL participants (including current user) - simpler query without inequality
+      final allParticipants = await _participantsCollection
           .where('schedule_id', isEqualTo: scheduleId)
-          .where('user_id', isNotEqualTo: userId)
           .get();
 
+      debugPrint('Total participants: ${allParticipants.docs.length}');
+
+      // Get current user's existing free days
+      final currentUserFreeDays = <FreeDay>[];
+      for (var doc in allParticipants.docs) {
+        if (doc.data()['user_id'] == userId) {
+          final freeDaysList = doc.data()['free_days'] as List?;
+          if (freeDaysList != null) {
+            for (var day in freeDaysList) {
+              currentUserFreeDays
+                  .add(FreeDay.fromJson(day as Map<String, dynamic>));
+            }
+          }
+          break;
+        }
+      }
+
+      debugPrint(
+          'Current user has ${currentUserFreeDays.length} existing free days');
+
+      // Check for conflicts with other participants
       for (var freeDay in newFreeDays) {
-        for (var participantDoc in participants.docs) {
+        // Check if this is an update to an existing day (same date)
+        final isUpdatingExistingDay = currentUserFreeDays.any((d) =>
+            d.date.year == freeDay.date.year &&
+            d.date.month == freeDay.date.month &&
+            d.date.day == freeDay.date.day);
+
+        debugPrint(
+            'Checking day ${freeDay.date} - isUpdate: $isUpdatingExistingDay');
+
+        // Check other participants
+        for (var participantDoc in allParticipants.docs) {
+          final participantUserId = participantDoc.data()['user_id'] as String;
+
+          // Skip current user
+          if (participantUserId == userId) continue;
+
           final freeDaysList = participantDoc.data()['free_days'] as List?;
           if (freeDaysList == null) continue;
 
@@ -347,21 +400,30 @@ class ScheduleService {
             final takenFreeDay =
                 FreeDay.fromJson(takenDay as Map<String, dynamic>);
 
-            if (_datesMatch(freeDay.date, takenFreeDay.date) &&
-                _timeSlotsOverlap(
-                  freeDay.startTime,
-                  freeDay.endTime,
-                  takenFreeDay.startTime,
-                  takenFreeDay.endTime,
-                )) {
-              return false;
+            // Check if dates match
+            if (_datesMatch(freeDay.date, takenFreeDay.date)) {
+              // Check if time slots overlap
+              final overlap = _timeSlotsOverlap(
+                freeDay.startTime,
+                freeDay.endTime,
+                takenFreeDay.startTime,
+                takenFreeDay.endTime,
+              );
+
+              if (overlap) {
+                debugPrint(
+                    'Time slot overlap detected on ${freeDay.date}: ${freeDay.startTime}-${freeDay.endTime} vs ${takenFreeDay.startTime}-${takenFreeDay.endTime} (participant: $participantUserId)');
+                return false;
+              }
             }
           }
         }
       }
 
+      debugPrint('Validation passed');
       return true;
     } catch (e) {
+      debugPrint('Validation error: $e');
       return false;
     }
   }
@@ -380,11 +442,17 @@ class ScheduleService {
           .where('schedule_id', isEqualTo: scheduleId)
           .get();
 
+      debugPrint('Checking schedule status for: $scheduleId');
+      debugPrint('Participants count: ${participants.docs.length}');
+
       // Map to store date -> list of time slots assigned
       final assignedSlotsByDate = <String, List<Map<String, int>>>{};
 
       for (var doc in participants.docs) {
         final freeDaysList = doc.data()['free_days'] as List?;
+        debugPrint(
+            'Participant ${doc.data()['user_id']} has ${freeDaysList?.length ?? 0} free days');
+
         if (freeDaysList != null) {
           for (var day in freeDaysList) {
             final freeDay = FreeDay.fromJson(day as Map<String, dynamic>);
@@ -393,6 +461,9 @@ class ScheduleService {
 
             final startMinutes = _timeToMinutes(freeDay.startTime);
             final endMinutes = _timeToMinutes(freeDay.endTime);
+
+            debugPrint(
+                'Assigned slot: $dateKey ${freeDay.startTime}-${freeDay.endTime}');
 
             if (!assignedSlotsByDate.containsKey(dateKey)) {
               assignedSlotsByDate[dateKey] = [];
@@ -411,6 +482,8 @@ class ScheduleService {
         schedule.duration,
       );
 
+      debugPrint('Schedule dates count: ${scheduleDates.length}');
+
       // Check if all dates are fully covered
       bool isFullySet = true;
 
@@ -424,6 +497,8 @@ class ScheduleService {
         'Sunday'
       ];
 
+      int coveredDays = 0;
+
       for (var date in scheduleDates) {
         final dateKey = '${date.year}-${date.month}-${date.day}';
         final dayName = daysOfWeek[date.weekday - 1];
@@ -431,58 +506,72 @@ class ScheduleService {
         // Get the available day constraints for this day
         final availableDay = schedule.availableDays.firstWhere(
           (d) => d.day == dayName,
-          orElse: () => throw Exception('Day not found'),
+          orElse: () => null as dynamic,
         );
 
         final dayStartMinutes = _timeToMinutes(availableDay.startTime);
         final dayEndMinutes = _timeToMinutes(availableDay.endTime);
+        final totalDayMinutes = dayEndMinutes - dayStartMinutes;
 
         if (!assignedSlotsByDate.containsKey(dateKey)) {
+          debugPrint('Date $dateKey has no assignments');
           isFullySet = false;
           break;
         }
 
-        // Check if the entire time range is covered
+        // Calculate total assigned minutes for this date
         final slots = assignedSlotsByDate[dateKey]!;
+        int totalAssignedMinutes = 0;
+
+        // Sort slots by start time
         slots.sort((a, b) => a['start']!.compareTo(b['start']!));
 
-        // Merge overlapping slots
+        // Merge overlapping slots and calculate coverage
         final mergedSlots = <Map<String, int>>[];
         for (var slot in slots) {
+          // Ensure slot is within the day's boundaries
+          final slotStart = slot['start']! < dayStartMinutes
+              ? dayStartMinutes
+              : slot['start']!;
+          final slotEnd =
+              slot['end']! > dayEndMinutes ? dayEndMinutes : slot['end']!;
+
+          if (slotStart >= slotEnd) continue;
+
           if (mergedSlots.isEmpty) {
-            mergedSlots.add(slot);
+            mergedSlots.add({'start': slotStart, 'end': slotEnd});
           } else {
             final last = mergedSlots.last;
-            if (slot['start']! <= last['end']!) {
+            if (slotStart <= last['end']!) {
               // Overlapping or adjacent, merge them
-              last['end'] =
-                  slot['end']! > last['end']! ? slot['end']! : last['end']!;
+              last['end'] = slotEnd > last['end']! ? slotEnd : last['end']!;
             } else {
-              mergedSlots.add(slot);
+              mergedSlots.add({'start': slotStart, 'end': slotEnd});
             }
           }
         }
 
-        // Check if merged slots cover the entire day
-        if (mergedSlots.isEmpty ||
-            mergedSlots.first['start']! > dayStartMinutes ||
-            mergedSlots.last['end']! < dayEndMinutes) {
+        // Calculate total coverage
+        for (var slot in mergedSlots) {
+          totalAssignedMinutes += slot['end']! - slot['start']!;
+        }
+
+        debugPrint(
+            'Date $dateKey: $totalAssignedMinutes/$totalDayMinutes minutes covered');
+
+        // Check if the entire day is covered
+        if (totalAssignedMinutes >= totalDayMinutes) {
+          coveredDays++;
+        } else {
           isFullySet = false;
-          break;
         }
-
-        // Check for gaps between slots
-        for (int i = 0; i < mergedSlots.length - 1; i++) {
-          if (mergedSlots[i]['end']! < mergedSlots[i + 1]['start']!) {
-            isFullySet = false;
-            break;
-          }
-        }
-
-        if (!isFullySet) break;
       }
 
+      debugPrint('Covered days: $coveredDays/${scheduleDates.length}');
+      debugPrint('Is fully set: $isFullySet');
+
       if (schedule.isFullySet != isFullySet) {
+        debugPrint('Updating schedule status to: $isFullySet');
         await _schedulesCollection.doc(scheduleId).update({
           'is_fully_set': isFullySet,
           'updated_at': FieldValue.serverTimestamp(),
@@ -493,7 +582,7 @@ class ScheduleService {
         }
       }
     } catch (e) {
-      // Silent fail
+      debugPrint('Error checking schedule status: $e');
     }
   }
 

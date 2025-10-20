@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../core/utils/firebase_manager.dart';
-import '../core/widgets/expandable_description.dart';
 import 'schedule_creation_screen.dart';
 import 'package:local_auth/local_auth.dart';
 import '../core/constants/app_colors.dart';
@@ -831,24 +830,26 @@ class HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
             child: Padding(
               padding: const EdgeInsets.symmetric(vertical: 6.0),
               child: Card(
-                elevation: 4,
-                shadowColor: Colors.black.withValues(alpha: 0.1),
+                elevation: 2,
+                shadowColor: Colors.black.withValues(alpha: 0.08),
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(12),
                 ),
                 color: isDark ? AppColors.darkCardBackground : Colors.white,
                 child: InkWell(
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(12),
                   onTap: () => _authenticateAndNavigate(schedule.id),
                   child: Padding(
-                    padding: const EdgeInsets.all(16.0),
+                    padding: const EdgeInsets.all(12.0),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        // Header Row - Compact
                         Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Container(
-                              padding: const EdgeInsets.all(10),
+                              padding: const EdgeInsets.all(8),
                               decoration: BoxDecoration(
                                 gradient: LinearGradient(
                                   colors: [
@@ -856,20 +857,12 @@ class HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                     AppColors.secondary
                                   ],
                                 ),
-                                borderRadius: BorderRadius.circular(12),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: AppColors.primary
-                                        .withValues(alpha: 0.3),
-                                    blurRadius: 8,
-                                    offset: const Offset(0, 2),
-                                  ),
-                                ],
+                                borderRadius: BorderRadius.circular(8),
                               ),
                               child: const Icon(Icons.schedule,
-                                  color: Colors.white, size: 20),
+                                  color: Colors.white, size: 18),
                             ),
-                            const SizedBox(width: 12),
+                            const SizedBox(width: 10),
                             Expanded(
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
@@ -877,7 +870,7 @@ class HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                   Text(
                                     schedule.name,
                                     style: TextStyle(
-                                      fontSize: isLargeScreen ? 18 : 16,
+                                      fontSize: 15,
                                       fontWeight: FontWeight.w700,
                                       color: isDark
                                           ? AppColors.darkTextPrimary
@@ -886,20 +879,21 @@ class HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                     maxLines: 1,
                                     overflow: TextOverflow.ellipsis,
                                   ),
-                                  const SizedBox(height: 4),
+                                  const SizedBox(height: 2),
                                   Row(
                                     children: [
                                       Container(
                                         padding: const EdgeInsets.symmetric(
-                                            horizontal: 8, vertical: 4),
+                                            horizontal: 6, vertical: 2),
                                         decoration: BoxDecoration(
                                           color: statusColor.withValues(
                                               alpha: 0.15),
                                           borderRadius:
-                                              BorderRadius.circular(6),
+                                              BorderRadius.circular(4),
                                           border: Border.all(
                                               color: statusColor.withValues(
-                                                  alpha: 0.5)),
+                                                  alpha: 0.5),
+                                              width: 0.5),
                                         ),
                                         child: Text(
                                           schedule.isFullySet
@@ -907,84 +901,115 @@ class HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                                               : 'Draft',
                                           style: TextStyle(
                                             color: statusColor,
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w700,
+                                            fontSize: 10,
+                                            fontWeight: FontWeight.w600,
                                           ),
                                         ),
                                       ),
-                                      const SizedBox(width: 6),
-                                      if (isOwner)
+                                      if (isOwner) ...[
+                                        const SizedBox(width: 4),
                                         Container(
                                           padding: const EdgeInsets.symmetric(
-                                              horizontal: 8, vertical: 4),
+                                              horizontal: 6, vertical: 2),
                                           decoration: BoxDecoration(
                                             color: AppColors.primary
-                                                .withValues(alpha: 0.15),
+                                                .withValues(alpha: 0.1),
                                             borderRadius:
-                                                BorderRadius.circular(6),
+                                                BorderRadius.circular(4),
                                           ),
                                           child: Row(
                                             mainAxisSize: MainAxisSize.min,
                                             children: [
                                               Icon(Icons.star,
-                                                  size: 12,
+                                                  size: 10,
                                                   color: AppColors.primary),
-                                              const SizedBox(width: 4),
+                                              const SizedBox(width: 2),
                                               Text(
                                                 'Owner',
                                                 style: TextStyle(
-                                                  fontSize: 11,
-                                                  fontWeight: FontWeight.w700,
+                                                  fontSize: 10,
+                                                  fontWeight: FontWeight.w600,
                                                   color: AppColors.primary,
                                                 ),
                                               ),
                                             ],
                                           ),
                                         ),
+                                      ],
                                     ],
                                   ),
                                 ],
                               ),
                             ),
+                            if (isOwner) ...[
+                              const SizedBox(width: 8),
+                              InkWell(
+                                onTap: () =>
+                                    _navigateToCreateSchedule(schedule),
+                                borderRadius: BorderRadius.circular(6),
+                                child: Container(
+                                  padding: const EdgeInsets.all(6),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.primary
+                                        .withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(6),
+                                  ),
+                                  child: Icon(
+                                    Icons.edit,
+                                    size: 16,
+                                    color: AppColors.primary,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ],
                         ),
+
+                        // Description - Compact
                         if (schedule.description != null &&
                             schedule.description!.isNotEmpty) ...[
-                          const SizedBox(height: 12),
-                          ExpandableDescription(
-                            description: schedule.description!,
-                            isLargeScreen: isLargeScreen,
+                          const SizedBox(height: 8),
+                          Text(
+                            schedule.description!,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: isDark
+                                  ? AppColors.darkTextSecondary
+                                  : AppColors.lightTextSecondary,
+                              height: 1.3,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ],
-                        const SizedBox(height: 12),
-                        Divider(
-                            color: isDark
-                                ? AppColors.darkDivider
-                                : AppColors.lightDivider),
-                        const SizedBox(height: 8),
+
+                        const SizedBox(height: 10),
+
+                        // Footer Row - Compact
                         Row(
                           children: [
                             Icon(
                               Icons.calendar_today,
-                              size: 14,
+                              size: 12,
                               color: isDark
                                   ? AppColors.darkTextSecondary
                                   : AppColors.lightTextSecondary,
                             ),
-                            const SizedBox(width: 6),
+                            const SizedBox(width: 4),
                             Text(
-                              'Created: ${DateFormat('MMM dd, yyyy').format(schedule.createdAt)}',
+                              DateFormat('MMM dd, yyyy')
+                                  .format(schedule.createdAt),
                               style: TextStyle(
-                                fontSize: 12,
+                                fontSize: 11,
                                 color: isDark
                                     ? AppColors.darkTextSecondary
                                     : AppColors.lightTextSecondary,
                               ),
                             ),
-                            const Spacer(),
+                            const SizedBox(width: 12),
                             Icon(
                               Icons.people,
-                              size: 14,
+                              size: 12,
                               color: isDark
                                   ? AppColors.darkTextSecondary
                                   : AppColors.lightTextSecondary,
@@ -993,51 +1018,47 @@ class HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
                             Text(
                               '${schedule.participants.length}',
                               style: TextStyle(
-                                fontSize: 12,
+                                fontSize: 11,
                                 fontWeight: FontWeight.w600,
                                 color: isDark
                                     ? AppColors.darkTextSecondary
                                     : AppColors.lightTextSecondary,
                               ),
                             ),
-                          ],
-                        ),
-                        const SizedBox(height: 12),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            if (isOwner)
-                              TextButton.icon(
-                                onPressed: () =>
-                                    _navigateToCreateSchedule(schedule),
-                                icon: const Icon(Icons.edit, size: 16),
-                                label: const Text('Edit'),
-                                style: TextButton.styleFrom(
-                                  foregroundColor: AppColors.primary,
-                                  padding: const EdgeInsets.symmetric(
-                                      horizontal: 12, vertical: 8),
-                                ),
-                              ),
-                            const SizedBox(width: 8),
-                            ElevatedButton.icon(
-                              onPressed: () =>
+                            const Spacer(),
+                            // Compact action button
+                            InkWell(
+                              onTap: () =>
                                   _authenticateAndNavigate(schedule.id),
-                              icon: Icon(
-                                _canUseBiometrics
-                                    ? Icons.fingerprint
-                                    : Icons.lock_open,
-                                size: 16,
-                              ),
-                              label: const Text('View Details'),
-                              style: ElevatedButton.styleFrom(
-                                backgroundColor: AppColors.primary,
-                                foregroundColor: Colors.white,
+                              borderRadius: BorderRadius.circular(8),
+                              child: Container(
                                 padding: const EdgeInsets.symmetric(
-                                    horizontal: 16, vertical: 10),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(10),
+                                    horizontal: 10, vertical: 6),
+                                decoration: BoxDecoration(
+                                  color: AppColors.primary,
+                                  borderRadius: BorderRadius.circular(8),
                                 ),
-                                elevation: 2,
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      _canUseBiometrics
+                                          ? Icons.fingerprint
+                                          : Icons.lock_open,
+                                      size: 14,
+                                      color: Colors.white,
+                                    ),
+                                    const SizedBox(width: 4),
+                                    const Text(
+                                      'View',
+                                      style: TextStyle(
+                                        color: Colors.white,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
                           ],
