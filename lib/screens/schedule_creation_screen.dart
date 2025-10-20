@@ -30,6 +30,7 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen>
   final ScheduleService _scheduleService = ScheduleService();
   final NotificationService _notificationService = NotificationService();
   final Map<String, String> _usernameCache = {};
+  final Set<String> _loadingUsernames = {}; // Track which usernames are loading
   final List<TextEditingController> _startTimeControllers =
       List.generate(7, (_) => TextEditingController(text: '08:00'));
   final List<TextEditingController> _endTimeControllers =
@@ -45,18 +46,19 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen>
   ];
   late List<bool> _selectedDays;
   final List<String> _durations = [
-    '1 day',
-    '2 days',
-    '3 days',
-    '4 days',
-    '5 days',
     '1 week',
     '2 weeks',
-    '1 month'
+    '3 weeks',
+    '1 month',
+    '2 months',
+    '3 months',
+    '6 months',
   ];
   String? _selectedDuration;
   List<Participant> _participants = [];
-  bool _isLoading = false;
+  bool _isAddingParticipant =
+      false; // Separate loading state for adding participants
+  bool _isSaving = false; // Loading state for save operation
   bool _isEditMode = false;
   DateTime _startDate = DateTime.now();
   late AnimationController _headerAnimController;
@@ -116,19 +118,25 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen>
   }
 
   Future<void> _loadUsernames() async {
+    // Initialize cache with userId as fallback
     for (var participant in _participants) {
       _usernameCache[participant.userId] = participant.userId;
+      _loadingUsernames.add(participant.userId);
     }
+    if (mounted) setState(() {});
+
     try {
       await Future.wait(_participants.map((participant) async {
         final username = await _findUsername(participant.userId);
         if (username != null) {
           _usernameCache[participant.userId] = username;
         }
+        _loadingUsernames.remove(participant.userId);
+        if (mounted) setState(() {});
       }));
-      if (mounted) setState(() {});
     } catch (e) {
-      // Failed to load usernames - not critical
+      _loadingUsernames.clear();
+      if (mounted) setState(() {});
     }
   }
 
@@ -207,16 +215,27 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen>
       return;
     }
 
-    setState(() => _isLoading = true);
+    setState(() => _isAddingParticipant = true);
 
     _findUserId(input).then((userId) {
       if (userId != null) {
+        // Add to loading set
+        _loadingUsernames.add(userId);
+
+        // Initialize cache with userId
+        _usernameCache[userId] = userId;
+
+        // Load username in background
         _findUsername(userId).then((username) {
           if (username != null) {
             setState(() {
               _usernameCache[userId] = username;
+              _loadingUsernames.remove(userId);
             });
           }
+        }).catchError((_) {
+          _loadingUsernames.remove(userId);
+          if (mounted) setState(() {});
         });
 
         setState(() {
@@ -238,16 +257,16 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen>
           participant.roles.add(role);
           _participantController.clear();
           _roleController.clear();
-          _isLoading = false;
+          _isAddingParticipant = false;
         });
 
         _showSnackBar('✓ Participant added successfully', isSuccess: true);
       } else {
-        setState(() => _isLoading = false);
+        setState(() => _isAddingParticipant = false);
         _showSnackBar('User not found with email: $input', isError: true);
       }
     }).catchError((error) {
-      setState(() => _isLoading = false);
+      setState(() => _isAddingParticipant = false);
       _showSnackBar('Error adding participant', isError: true);
     });
   }
@@ -277,7 +296,7 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen>
       }
     }
 
-    setState(() => _isLoading = true);
+    setState(() => _isSaving = true);
 
     try {
       final availableDays = <AvailableDay>[];
@@ -344,7 +363,7 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen>
                 participant.roles.map((r) => r.name).join(', '),
               );
             } catch (e) {
-              // Failed to send invitation - not critical, schedule still created
+              // Silently handle notification errors
             }
           }
         }
@@ -362,7 +381,7 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen>
     } catch (e) {
       _showSnackBar('Error: $e', isError: true);
     } finally {
-      if (mounted) setState(() => _isLoading = false);
+      if (mounted) setState(() => _isSaving = false);
     }
   }
 
@@ -422,47 +441,82 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen>
         color: isDark ? AppColors.darkSurface : Colors.white,
       ),
       child: InkWell(
-        onTap: () => _selectDate(context),
+        onTap: _isEditMode
+            ? null
+            : () => _selectDate(context), // Disable tap in edit mode
         borderRadius: BorderRadius.circular(12),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Row(
-                children: [
-                  Icon(Icons.calendar_today,
-                      color: AppColors.primary, size: 20),
-                  const SizedBox(width: 12),
-                  Text(
-                    DateFormat('MMM dd, yyyy').format(_startDate),
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: isDark
-                          ? AppColors.darkTextPrimary
-                          : AppColors.lightTextPrimary,
+        child: Opacity(
+          opacity: _isEditMode ? 0.6 : 1.0, // Reduce opacity in edit mode
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Icon(
+                      Icons.calendar_today,
+                      color: _isEditMode
+                          ? (isDark
+                              ? AppColors.darkTextSecondary
+                              : AppColors.lightTextSecondary)
+                          : AppColors.primary,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 12),
+                    Text(
+                      DateFormat('MMM dd, yyyy').format(_startDate),
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: isDark
+                            ? AppColors.darkTextPrimary
+                            : AppColors.lightTextPrimary,
+                      ),
+                    ),
+                  ],
+                ),
+                if (!_isEditMode)
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Text(
+                      'Change',
+                      style: TextStyle(
+                        color: AppColors.primary,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
+                    ),
+                  )
+                else
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: (isDark
+                              ? AppColors.darkTextSecondary
+                              : AppColors.lightTextSecondary)
+                          .withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      'Fixed',
+                      style: TextStyle(
+                        color: isDark
+                            ? AppColors.darkTextSecondary
+                            : AppColors.lightTextSecondary,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 13,
+                      ),
                     ),
                   ),
-                ],
-              ),
-              Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: AppColors.primary.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: const Text(
-                  'Change',
-                  style: TextStyle(
-                    color: AppColors.primary,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 13,
-                  ),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
@@ -516,7 +570,7 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen>
         foregroundColor: Colors.white,
         elevation: 0,
         actions: [
-          if (!_isLoading)
+          if (!_isSaving)
             IconButton(
               icon: const Icon(Icons.info_outline),
               onPressed: () {
@@ -542,69 +596,103 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen>
             ),
         ],
       ),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: isDark
-                ? [AppColors.darkBackground, AppColors.darkSurface]
-                : [AppColors.lightBackground, AppColors.lightSurface],
-          ),
-        ),
-        child: SafeArea(
-          child: _isLoading && _participants.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      CircularProgressIndicator(color: AppColors.primary),
-                      const SizedBox(height: 16),
-                      Text(
-                        'Loading...',
-                        style: TextStyle(
-                          color: isDark
-                              ? AppColors.darkTextSecondary
-                              : AppColors.lightTextSecondary,
-                        ),
-                      ),
-                    ],
-                  ),
-                )
-              : SlideTransition(
-                  position: _cardSlideAnimation,
-                  child: FadeTransition(
-                    opacity: _headerAnimation,
-                    child: SingleChildScrollView(
-                      padding: EdgeInsets.symmetric(
-                        horizontal: isSmallScreen ? 16.0 : 24.0,
-                        vertical: 16.0,
-                      ),
-                      child: Center(
-                        child: ConstrainedBox(
-                          constraints: const BoxConstraints(maxWidth: 800),
-                          child: Form(
-                            key: _formKey,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.stretch,
-                              children: [
-                                _buildInfoCard(isDark, isSmallScreen),
-                                const SizedBox(height: 16),
-                                _buildDaysCard(isDark, isSmallScreen),
-                                const SizedBox(height: 16),
-                                _buildParticipantsCard(isDark, isSmallScreen),
-                                const SizedBox(height: 24),
-                                _buildSaveButton(isSmallScreen),
-                                const SizedBox(height: 32),
-                              ],
-                            ),
+      body: Stack(
+        children: [
+          Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: isDark
+                    ? [AppColors.darkBackground, AppColors.darkSurface]
+                    : [AppColors.lightBackground, AppColors.lightSurface],
+              ),
+            ),
+            child: SafeArea(
+              child: SlideTransition(
+                position: _cardSlideAnimation,
+                child: FadeTransition(
+                  opacity: _headerAnimation,
+                  child: SingleChildScrollView(
+                    padding: EdgeInsets.symmetric(
+                      horizontal: isSmallScreen ? 16.0 : 24.0,
+                      vertical: 16.0,
+                    ),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 800),
+                        child: Form(
+                          key: _formKey,
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              _buildInfoCard(isDark, isSmallScreen),
+                              const SizedBox(height: 16),
+                              _buildDaysCard(isDark, isSmallScreen),
+                              const SizedBox(height: 16),
+                              _buildParticipantsCard(isDark, isSmallScreen),
+                              const SizedBox(height: 24),
+                              _buildSaveButton(isSmallScreen),
+                              const SizedBox(height: 32),
+                            ],
                           ),
                         ),
                       ),
                     ),
                   ),
                 ),
-        ),
+              ),
+            ),
+          ),
+          // Semi-transparent overlay when saving
+          if (_isSaving)
+            Container(
+              color: Colors.black.withValues(alpha: 0.5),
+              child: Center(
+                child: Card(
+                  elevation: 8,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(32.0),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        CircularProgressIndicator(
+                          color: AppColors.primary,
+                          strokeWidth: 3,
+                        ),
+                        const SizedBox(height: 24),
+                        Text(
+                          _isEditMode
+                              ? 'Updating schedule...'
+                              : 'Creating schedule...',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w600,
+                            color: isDark
+                                ? AppColors.darkTextPrimary
+                                : AppColors.lightTextPrimary,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          'Please wait',
+                          style: TextStyle(
+                            fontSize: 14,
+                            color: isDark
+                                ? AppColors.darkTextSecondary
+                                : AppColors.lightTextSecondary,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -680,15 +768,45 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen>
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'Start Date',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w600,
-                  color: isDark
-                      ? AppColors.darkTextPrimary
-                      : AppColors.lightTextPrimary,
-                ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text(
+                    'Start Date',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w600,
+                      color: isDark
+                          ? AppColors.darkTextPrimary
+                          : AppColors.lightTextPrimary,
+                    ),
+                  ),
+                  if (_isEditMode)
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: AppColors.info.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(Icons.lock_outline,
+                              size: 12, color: AppColors.info),
+                          const SizedBox(width: 4),
+                          Text(
+                            'Cannot be changed',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: AppColors.info,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
               ),
               const SizedBox(height: 10),
               _buildDateSelector(isDark),
@@ -884,15 +1002,16 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen>
           SizedBox(
             width: double.infinity,
             child: ElevatedButton.icon(
-              onPressed: _isLoading ? null : _addRoleToParticipant,
-              icon: _isLoading
+              onPressed: _isAddingParticipant ? null : _addRoleToParticipant,
+              icon: _isAddingParticipant
                   ? const SizedBox(
                       width: 20,
                       height: 20,
                       child: CircularProgressIndicator(
                           strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.person_add),
-              label: const Text('Add Participant'),
+              label:
+                  Text(_isAddingParticipant ? 'Adding...' : 'Add Participant'),
               style: ElevatedButton.styleFrom(
                 backgroundColor: AppColors.primary,
                 foregroundColor: Colors.white,
@@ -913,6 +1032,9 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen>
               separatorBuilder: (context, index) => const SizedBox(height: 8),
               itemBuilder: (context, index) {
                 final p = _participants[index];
+                final isLoading = _loadingUsernames.contains(p.userId);
+                final displayName = _usernameCache[p.userId] ?? 'Loading...';
+
                 return Container(
                   decoration: BoxDecoration(
                     color:
@@ -925,16 +1047,45 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen>
                     leading: CircleAvatar(
                       backgroundColor: AppColors.primary,
                       foregroundColor: Colors.white,
-                      child: Text(
-                        (_usernameCache[p.userId] ?? 'U')
-                            .substring(0, 1)
-                            .toUpperCase(),
-                        style: const TextStyle(fontWeight: FontWeight.bold),
-                      ),
+                      child: isLoading
+                          ? const SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Colors.white,
+                              ),
+                            )
+                          : Text(
+                              displayName.substring(0, 1).toUpperCase(),
+                              style:
+                                  const TextStyle(fontWeight: FontWeight.bold),
+                            ),
                     ),
-                    title: Text(
-                      _usernameCache[p.userId] ?? 'Loading...',
-                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    title: Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            displayName,
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              color: isLoading
+                                  ? (isDark
+                                      ? AppColors.darkTextSecondary
+                                      : AppColors.lightTextSecondary)
+                                  : (isDark
+                                      ? AppColors.darkTextPrimary
+                                      : AppColors.lightTextPrimary),
+                            ),
+                          ),
+                        ),
+                        if (isLoading)
+                          const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          ),
+                      ],
                     ),
                     subtitle: Text(
                       p.roles.map((r) => r.name).join(', '),
@@ -947,11 +1098,12 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen>
                     trailing: IconButton(
                       icon: const Icon(Icons.delete_outline,
                           color: AppColors.error),
-                      onPressed: _isLoading
+                      onPressed: _isAddingParticipant || _isSaving
                           ? null
                           : () {
                               setState(() {
                                 _participants.remove(p);
+                                _loadingUsernames.remove(p.userId);
                               });
                               _showSnackBar('Participant removed',
                                   isSuccess: true);
@@ -973,8 +1125,8 @@ class ScheduleCreationScreenState extends State<ScheduleCreationScreen>
       child: GradientButton(
         text: _isEditMode ? 'Update Schedule' : 'Create Schedule',
         onPressed: _saveSchedule,
-        isLoading: _isLoading,
-        enabled: !_isLoading,
+        isLoading: _isSaving,
+        enabled: !_isSaving && !_isAddingParticipant,
       ),
     );
   }

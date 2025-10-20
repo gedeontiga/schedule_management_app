@@ -12,7 +12,7 @@
 .swiftpm/
 migrate_working_dir/
 assets/**
-!assets/schedulo_logo.png
+!assets/schedulo.png
 lib/firebase_options.dart
 
 # IntelliJ related

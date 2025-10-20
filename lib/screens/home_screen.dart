@@ -503,30 +503,74 @@ class HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         itemCount: 3,
         itemBuilder: (context, index) {
           return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8.0),
-            child: Container(
-              height: 140,
-              decoration: BoxDecoration(
-                color: isDark ? AppColors.darkCardBackground : Colors.white,
-                borderRadius: BorderRadius.circular(16),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.05),
-                    blurRadius: 10,
-                    offset: const Offset(0, 2),
-                  ),
-                ],
-              ),
-              child: Center(
-                child: CircularProgressIndicator(
-                  valueColor:
-                      const AlwaysStoppedAnimation<Color>(AppColors.primary),
-                ),
-              ),
-            ),
+            padding: const EdgeInsets.symmetric(vertical: 6.0),
+            child: _buildSkeletonCard(isDark),
           );
         },
       ),
+    );
+  }
+
+  Widget _buildSkeletonCard(bool isDark) {
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      color: isDark ? AppColors.darkCardBackground : Colors.white,
+      child: Padding(
+        padding: const EdgeInsets.all(12.0),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                _buildShimmer(40, 40, isDark, isCircle: true),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildShimmer(150, 16, isDark),
+                      const SizedBox(height: 6),
+                      _buildShimmer(100, 12, isDark),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            _buildShimmer(double.infinity, 10, isDark),
+            const SizedBox(height: 6),
+            _buildShimmer(200, 10, isDark),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildShimmer(double width, double height, bool isDark,
+      {bool isCircle = false}) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween(begin: 0.3, end: 1.0),
+      duration: const Duration(milliseconds: 1000),
+      curve: Curves.easeInOut,
+      builder: (context, value, child) {
+        return Opacity(
+          opacity: value,
+          child: Container(
+            width: width,
+            height: height,
+            decoration: BoxDecoration(
+              color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
+              borderRadius: isCircle
+                  ? BorderRadius.circular(height / 2)
+                  : BorderRadius.circular(6),
+            ),
+          ),
+        );
+      },
+      onEnd: () {
+        if (mounted) setState(() {});
+      },
     );
   }
 

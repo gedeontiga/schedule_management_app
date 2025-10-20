@@ -42,18 +42,20 @@ class ScheduleService {
   Future<void> createSchedule(Schedule schedule) async {
     try {
       if (await _isOnline()) {
-        // Online: Save to Firestore
+        // Create schedule document
         await _schedulesCollection.doc(schedule.id).set(schedule.toJson());
 
-        // Save participants
+        // Create participant documents with proper structure
         for (var participant in schedule.participants) {
           await _participantsCollection.add({
-            ...participant.toJson(),
+            'user_id': participant.userId,
             'schedule_id': schedule.id,
+            'roles': participant.roles.map((r) => r.toJson()).toList(),
+            'free_days': participant.freeDays.map((d) => d.toJson()).toList(),
+            'created_at': FieldValue.serverTimestamp(),
           });
         }
       } else {
-        // Offline: Queue for sync
         await _offlineSync.queueOperation({
           'type': 'create_schedule',
           'data': schedule.toJson(),
@@ -61,7 +63,6 @@ class ScheduleService {
         });
       }
     } catch (e) {
-      // Fallback to offline queue
       await _offlineSync.queueOperation({
         'type': 'create_schedule',
         'data': schedule.toJson(),
@@ -74,20 +75,20 @@ class ScheduleService {
 
   Future<Schedule> copySchedule(String scheduleId, String newName) async {
     try {
-      // Fetch original schedule
       final originalDoc = await _schedulesCollection.doc(scheduleId).get();
 
       if (!originalDoc.exists) {
         throw Exception('Schedule not found');
       }
 
-      final originalSchedule = Schedule.fromJson(
-        originalDoc.data() as Map<String, dynamic>,
-      );
+      final originalSchedule = Schedule.fromJson({
+        ...originalDoc.data() as Map<String, dynamic>,
+        'id': originalDoc.id,
+      });
 
-      // Create new schedule with same configuration
+      final newScheduleId = const Uuid().v4();
       final newSchedule = Schedule(
-        id: const Uuid().v4(),
+        id: newScheduleId,
         name: newName,
         description: originalSchedule.description,
         availableDays: originalSchedule.availableDays,
@@ -96,9 +97,9 @@ class ScheduleService {
         participants: originalSchedule.participants
             .map((p) => Participant(
                   userId: p.userId,
-                  scheduleId: '', // Will be set after creation
+                  scheduleId: newScheduleId,
                   roles: p.roles,
-                  freeDays: [], // Empty for new schedule
+                  freeDays: [],
                 ))
             .toList(),
         isFullySet: false,
@@ -123,11 +124,11 @@ class ScheduleService {
           'available_days':
               schedule.availableDays.map((d) => d.toJson()).toList(),
           'duration': schedule.duration,
+          'start_date': Timestamp.fromDate(schedule.startDate),
           'is_fully_set': schedule.isFullySet,
           'updated_at': FieldValue.serverTimestamp(),
         });
 
-        // Sync participants
         await syncParticipants(schedule.id, schedule.participants);
       } else {
         await _offlineSync.queueOperation({
@@ -152,14 +153,12 @@ class ScheduleService {
     required List<FreeDay> freeDays,
   }) async {
     try {
-      // Validate free days
       final isValid = await validateFreeDays(scheduleId, userId, freeDays);
       if (!isValid) {
         throw Exception('Selected days are not available or already taken');
       }
 
       if (await _isOnline()) {
-        // Find participant document
         final participantQuery = await _participantsCollection
             .where('schedule_id', isEqualTo: scheduleId)
             .where('user_id', isEqualTo: userId)
@@ -169,16 +168,13 @@ class ScheduleService {
           throw Exception('Participant not found');
         }
 
-        // Update free days
         await participantQuery.docs.first.reference.update({
           'free_days': freeDays.map((d) => d.toJson()).toList(),
           'updated_at': FieldValue.serverTimestamp(),
         });
 
-        // Check and update schedule status
         await _checkAndUpdateScheduleStatus(scheduleId);
 
-        // Send notifications to other participants
         await _notifyParticipants(scheduleId, userId, 'free_days_updated');
       } else {
         await _offlineSync.queueOperation({
@@ -199,7 +195,6 @@ class ScheduleService {
   Future<void> deleteSchedule(String scheduleId) async {
     try {
       if (await _isOnline()) {
-        // Delete participants
         final participants = await _participantsCollection
             .where('schedule_id', isEqualTo: scheduleId)
             .get();
@@ -208,7 +203,6 @@ class ScheduleService {
           await doc.reference.delete();
         }
 
-        // Delete schedule
         await _schedulesCollection.doc(scheduleId).delete();
       } else {
         await _offlineSync.queueOperation({
@@ -227,15 +221,16 @@ class ScheduleService {
         .where('owner_id', isEqualTo: userId)
         .snapshots()
         .asyncMap((ownedSnapshot) async {
-      // Get owned schedules
-      final ownedSchedules = ownedSnapshot.docs
-          .map((doc) => Schedule.fromJson({
-                ...doc.data(),
-                'id': doc.id,
-              }))
-          .toList();
+      final ownedSchedules = await Future.wait(
+        ownedSnapshot.docs.map((doc) async {
+          final participants = await getParticipants(doc.id).first;
+          return Schedule.fromJson({
+            ...doc.data(),
+            'id': doc.id,
+          }).copyWith(participants: participants);
+        }),
+      );
 
-      // Get schedules where user is participant
       final participantSnapshot = await _participantsCollection
           .where('user_id', isEqualTo: userId)
           .get();
@@ -243,6 +238,7 @@ class ScheduleService {
       final participantScheduleIds = participantSnapshot.docs
           .map((doc) => doc.data()['schedule_id'] as String)
           .where((id) => !ownedSchedules.any((s) => s.id == id))
+          .toSet()
           .toList();
 
       List<Schedule> participantSchedules = [];
@@ -250,10 +246,13 @@ class ScheduleService {
         for (var id in participantScheduleIds) {
           final doc = await _schedulesCollection.doc(id).get();
           if (doc.exists) {
-            participantSchedules.add(Schedule.fromJson({
-              ...doc.data()!,
-              'id': doc.id,
-            }));
+            final participants = await getParticipants(id).first;
+            participantSchedules.add(
+              Schedule.fromJson({
+                ...doc.data()!,
+                'id': doc.id,
+              }).copyWith(participants: participants),
+            );
           }
         }
       }
@@ -263,11 +262,19 @@ class ScheduleService {
   }
 
   Stream<Schedule> getSchedule(String scheduleId) {
-    return _schedulesCollection.doc(scheduleId).snapshots().map((doc) {
+    return _schedulesCollection
+        .doc(scheduleId)
+        .snapshots()
+        .asyncMap((doc) async {
       if (!doc.exists) {
         throw Exception('Schedule not found');
       }
-      return Schedule.fromJson({...doc.data()!, 'id': doc.id});
+
+      final participants = await getParticipants(scheduleId).first;
+      return Schedule.fromJson({
+        ...doc.data()!,
+        'id': doc.id,
+      }).copyWith(participants: participants);
     });
   }
 
@@ -276,7 +283,10 @@ class ScheduleService {
         .where('schedule_id', isEqualTo: scheduleId)
         .snapshots()
         .map((snapshot) => snapshot.docs
-            .map((doc) => Participant.fromJson(doc.data()))
+            .map((doc) => Participant.fromJson({
+                  ...doc.data(),
+                  'id': doc.id,
+                }))
             .toList());
   }
 
@@ -286,7 +296,6 @@ class ScheduleService {
     List<FreeDay> newFreeDays,
   ) async {
     try {
-      // Get schedule details
       final scheduleDoc = await _schedulesCollection.doc(scheduleId).get();
       if (!scheduleDoc.exists) return false;
 
@@ -295,14 +304,12 @@ class ScheduleService {
         'id': scheduleDoc.id,
       });
 
-      // Calculate valid dates
       final validDates = _calculateScheduleDates(
         schedule.startDate,
         schedule.availableDays.map((d) => d.day).toList(),
         schedule.duration,
       );
 
-      // Check if dates are valid
       for (var freeDay in newFreeDays) {
         if (!validDates.any((date) =>
             date.year == freeDay.date.year &&
@@ -311,9 +318,10 @@ class ScheduleService {
           return false;
         }
 
-        // Check time slot validity
-        final availableDay =
-            schedule.availableDays.firstWhere((d) => d.day == freeDay.day);
+        final availableDay = schedule.availableDays.firstWhere(
+          (d) => d.day == freeDay.day,
+          orElse: () => throw Exception('Day not found in available days'),
+        );
 
         if (!_isTimeSlotValid(
           freeDay.startTime,
@@ -325,7 +333,6 @@ class ScheduleService {
         }
       }
 
-      // Check for conflicts with other participants
       final participants = await _participantsCollection
           .where('schedule_id', isEqualTo: scheduleId)
           .where('user_id', isNotEqualTo: userId)
@@ -337,7 +344,8 @@ class ScheduleService {
           if (freeDaysList == null) continue;
 
           for (var takenDay in freeDaysList) {
-            final takenFreeDay = FreeDay.fromJson(takenDay);
+            final takenFreeDay =
+                FreeDay.fromJson(takenDay as Map<String, dynamic>);
 
             if (_datesMatch(freeDay.date, takenFreeDay.date) &&
                 _timeSlotsOverlap(
@@ -368,39 +376,111 @@ class ScheduleService {
         'id': scheduleDoc.id,
       });
 
-      // Get all assigned dates
       final participants = await _participantsCollection
           .where('schedule_id', isEqualTo: scheduleId)
           .get();
 
-      final assignedDates = <DateTime>{};
+      // Map to store date -> list of time slots assigned
+      final assignedSlotsByDate = <String, List<Map<String, int>>>{};
+
       for (var doc in participants.docs) {
         final freeDaysList = doc.data()['free_days'] as List?;
         if (freeDaysList != null) {
           for (var day in freeDaysList) {
-            final freeDay = FreeDay.fromJson(day);
-            assignedDates.add(DateTime(
-              freeDay.date.year,
-              freeDay.date.month,
-              freeDay.date.day,
-            ));
+            final freeDay = FreeDay.fromJson(day as Map<String, dynamic>);
+            final dateKey =
+                '${freeDay.date.year}-${freeDay.date.month}-${freeDay.date.day}';
+
+            final startMinutes = _timeToMinutes(freeDay.startTime);
+            final endMinutes = _timeToMinutes(freeDay.endTime);
+
+            if (!assignedSlotsByDate.containsKey(dateKey)) {
+              assignedSlotsByDate[dateKey] = [];
+            }
+            assignedSlotsByDate[dateKey]!.add({
+              'start': startMinutes,
+              'end': endMinutes,
+            });
           }
         }
       }
 
-      // Calculate required dates
       final scheduleDates = _calculateScheduleDates(
         schedule.startDate,
         schedule.availableDays.map((d) => d.day).toList(),
         schedule.duration,
       );
 
-      // Check if fully set
-      final isFullySet = scheduleDates.every((date) => assignedDates.any(
-          (assigned) =>
-              assigned.year == date.year &&
-              assigned.month == date.month &&
-              assigned.day == date.day));
+      // Check if all dates are fully covered
+      bool isFullySet = true;
+
+      final daysOfWeek = [
+        'Monday',
+        'Tuesday',
+        'Wednesday',
+        'Thursday',
+        'Friday',
+        'Saturday',
+        'Sunday'
+      ];
+
+      for (var date in scheduleDates) {
+        final dateKey = '${date.year}-${date.month}-${date.day}';
+        final dayName = daysOfWeek[date.weekday - 1];
+
+        // Get the available day constraints for this day
+        final availableDay = schedule.availableDays.firstWhere(
+          (d) => d.day == dayName,
+          orElse: () => throw Exception('Day not found'),
+        );
+
+        final dayStartMinutes = _timeToMinutes(availableDay.startTime);
+        final dayEndMinutes = _timeToMinutes(availableDay.endTime);
+
+        if (!assignedSlotsByDate.containsKey(dateKey)) {
+          isFullySet = false;
+          break;
+        }
+
+        // Check if the entire time range is covered
+        final slots = assignedSlotsByDate[dateKey]!;
+        slots.sort((a, b) => a['start']!.compareTo(b['start']!));
+
+        // Merge overlapping slots
+        final mergedSlots = <Map<String, int>>[];
+        for (var slot in slots) {
+          if (mergedSlots.isEmpty) {
+            mergedSlots.add(slot);
+          } else {
+            final last = mergedSlots.last;
+            if (slot['start']! <= last['end']!) {
+              // Overlapping or adjacent, merge them
+              last['end'] =
+                  slot['end']! > last['end']! ? slot['end']! : last['end']!;
+            } else {
+              mergedSlots.add(slot);
+            }
+          }
+        }
+
+        // Check if merged slots cover the entire day
+        if (mergedSlots.isEmpty ||
+            mergedSlots.first['start']! > dayStartMinutes ||
+            mergedSlots.last['end']! < dayEndMinutes) {
+          isFullySet = false;
+          break;
+        }
+
+        // Check for gaps between slots
+        for (int i = 0; i < mergedSlots.length - 1; i++) {
+          if (mergedSlots[i]['end']! < mergedSlots[i + 1]['start']!) {
+            isFullySet = false;
+            break;
+          }
+        }
+
+        if (!isFullySet) break;
+      }
 
       if (schedule.isFullySet != isFullySet) {
         await _schedulesCollection.doc(scheduleId).update({
@@ -408,11 +488,12 @@ class ScheduleService {
           'updated_at': FieldValue.serverTimestamp(),
         });
 
-        // Notify participants
-        await _notifyParticipants(scheduleId, null, 'schedule_status_updated');
+        if (isFullySet) {
+          await _notifyParticipants(scheduleId, null, 'schedule_completed');
+        }
       }
     } catch (e) {
-      // ignore
+      // Silent fail
     }
   }
 
@@ -421,7 +502,6 @@ class ScheduleService {
     List<Participant> participants,
   ) async {
     try {
-      // Get existing participants
       final existingDocs = await _participantsCollection
           .where('schedule_id', isEqualTo: scheduleId)
           .get();
@@ -431,7 +511,6 @@ class ScheduleService {
           .toSet();
       final newUserIds = participants.map((p) => p.userId).toSet();
 
-      // Remove participants no longer in list
       final toRemove = existingUserIds.difference(newUserIds);
       for (var doc in existingDocs.docs) {
         if (toRemove.contains(doc.data()['user_id'])) {
@@ -439,29 +518,28 @@ class ScheduleService {
         }
       }
 
-      // Add or update participants
       for (var participant in participants) {
-        final existingDoc = existingDocs.docs.firstWhere(
-          (doc) => doc.data()['user_id'] == participant.userId,
-          orElse: () => throw StateError('Not found'),
-        );
+        final existingDocList = existingDocs.docs
+            .where((doc) => doc.data()['user_id'] == participant.userId)
+            .toList();
 
-        try {
-          await existingDoc.reference.update({
+        if (existingDocList.isNotEmpty) {
+          await existingDocList.first.reference.update({
             'roles': participant.roles.map((r) => r.toJson()).toList(),
             'updated_at': FieldValue.serverTimestamp(),
           });
-        } catch (e) {
-          // Document doesn't exist, create it
+        } else {
           await _participantsCollection.add({
-            ...participant.toJson(),
+            'user_id': participant.userId,
             'schedule_id': scheduleId,
+            'roles': participant.roles.map((r) => r.toJson()).toList(),
+            'free_days': participant.freeDays.map((d) => d.toJson()).toList(),
             'created_at': FieldValue.serverTimestamp(),
           });
         }
       }
     } catch (e) {
-      // ignore
+      // Silent fail
     }
   }
 
@@ -495,7 +573,7 @@ class ScheduleService {
         });
       }
     } catch (e) {
-      // ignore
+      // Silent fail
     }
   }
 
@@ -522,11 +600,23 @@ class ScheduleService {
       case '2 weeks':
         weeks = 2;
         break;
+      case '3 weeks':
+        weeks = 3;
+        break;
       case '1 month':
-        weeks = 5;
+        weeks = 4;
+        break;
+      case '2 months':
+        weeks = 8;
+        break;
+      case '3 months':
+        weeks = 12;
+        break;
+      case '6 months':
+        weeks = 26;
         break;
       default:
-        weeks = int.parse(duration.split(' ')[0]);
+        weeks = int.tryParse(duration.split(' ')[0]) ?? 1;
     }
 
     final endDate = startDate.add(Duration(days: weeks * 7));
@@ -555,7 +645,7 @@ class ScheduleService {
     final availStart = _timeToMinutes(availableStart);
     final availEnd = _timeToMinutes(availableEnd);
 
-    return start >= availStart && end <= availEnd;
+    return start >= availStart && end <= availEnd && start < end;
   }
 
   bool _datesMatch(DateTime date1, DateTime date2) {
@@ -581,6 +671,7 @@ class ScheduleService {
   int _timeToMinutes(String timeString) {
     if (timeString.isEmpty) return 0;
     final parts = timeString.split(':');
+    if (parts.length != 2) return 0;
     return int.parse(parts[0]) * 60 + int.parse(parts[1]);
   }
 
