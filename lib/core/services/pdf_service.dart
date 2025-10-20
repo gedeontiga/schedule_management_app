@@ -124,38 +124,70 @@ class PdfService {
 
   pw.Widget _buildHeader(Uint8List logoImage, Schedule schedule) {
     return pw.Container(
-      padding: const pw.EdgeInsets.only(bottom: 16),
+      padding: const pw.EdgeInsets.only(bottom: 20),
+      margin: const pw.EdgeInsets.only(bottom: 8),
       decoration: pw.BoxDecoration(
         border: pw.Border(
-          bottom: pw.BorderSide(color: primaryBlue, width: 2.5),
+          bottom: pw.BorderSide(color: calendarBorder, width: 1),
         ),
       ),
       child: pw.Row(
         mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: pw.CrossAxisAlignment.center,
         children: [
-          pw.Image(pw.MemoryImage(logoImage), height: 42),
-          pw.Column(
-            crossAxisAlignment: pw.CrossAxisAlignment.end,
+          pw.Row(
             children: [
-              pw.Text(
-                'SCHEDULER',
-                style: pw.TextStyle(
-                  fontSize: 22,
-                  fontWeight: pw.FontWeight.bold,
-                  color: primaryBlue,
-                  letterSpacing: 1.2,
+              pw.Container(
+                padding: const pw.EdgeInsets.all(8),
+                decoration: pw.BoxDecoration(
+                  color: lightBackground,
+                  borderRadius: pw.BorderRadius.circular(12),
+                  border: pw.Border.all(color: calendarBorder, width: 1),
                 ),
+                child:
+                    pw.Image(pw.MemoryImage(logoImage), height: 32, width: 32),
               ),
-              pw.SizedBox(height: 2),
-              pw.Text(
-                'Interpretation Planning',
-                style: pw.TextStyle(
-                  fontSize: 10,
-                  color: mediumGray,
-                  fontStyle: pw.FontStyle.italic,
-                ),
+              pw.SizedBox(width: 16),
+              pw.Column(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
+                children: [
+                  pw.Text(
+                    'Scheduler',
+                    style: pw.TextStyle(
+                      fontSize: 24,
+                      fontWeight: pw.FontWeight.bold,
+                      color: darkGray,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                  pw.SizedBox(height: 2),
+                  pw.Text(
+                    'Interpretation Planning System',
+                    style: pw.TextStyle(
+                      fontSize: 10,
+                      color: mediumGray,
+                    ),
+                  ),
+                ],
               ),
             ],
+          ),
+          pw.Container(
+            padding: const pw.EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+            decoration: pw.BoxDecoration(
+              gradient: pw.LinearGradient(
+                colors: [primaryBlue, PdfColor.fromHex('#4A7BA7')],
+              ),
+              borderRadius: pw.BorderRadius.circular(8),
+            ),
+            child: pw.Text(
+              schedule.name,
+              style: pw.TextStyle(
+                fontSize: 12,
+                fontWeight: pw.FontWeight.bold,
+                color: PdfColors.white,
+              ),
+            ),
           ),
         ],
       ),
@@ -391,10 +423,22 @@ class PdfService {
 
     rows.add(
       pw.TableRow(
-        decoration: pw.BoxDecoration(color: headerGray),
-        children: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+        decoration: pw.BoxDecoration(
+          gradient: pw.LinearGradient(
+            colors: [headerGray, PdfColor.fromHex('#5A6C7D')],
+          ),
+        ),
+        children: [
+          'Monday',
+          'Tuesday',
+          'Wednesday',
+          'Thursday',
+          'Friday',
+          'Saturday',
+          'Sunday'
+        ]
             .map((day) => pw.Container(
-                  padding: const pw.EdgeInsets.all(10),
+                  padding: const pw.EdgeInsets.symmetric(vertical: 12),
                   alignment: pw.Alignment.center,
                   child: pw.Text(
                     day,
@@ -402,7 +446,7 @@ class PdfService {
                       fontSize: 10,
                       fontWeight: pw.FontWeight.bold,
                       color: PdfColors.white,
-                      letterSpacing: 0.5,
+                      letterSpacing: 0.3,
                     ),
                   ),
                 ))
@@ -430,6 +474,15 @@ class PdfService {
 
     return pw.Table(
       border: pw.TableBorder.all(color: calendarBorder, width: 0.5),
+      columnWidths: {
+        0: const pw.FlexColumnWidth(1),
+        1: const pw.FlexColumnWidth(1),
+        2: const pw.FlexColumnWidth(1),
+        3: const pw.FlexColumnWidth(1),
+        4: const pw.FlexColumnWidth(1),
+        5: const pw.FlexColumnWidth(1),
+        6: const pw.FlexColumnWidth(1),
+      },
       children: rows,
     );
   }
@@ -555,28 +608,31 @@ class PdfService {
     return pw.Column(
       crossAxisAlignment: pw.CrossAxisAlignment.start,
       children: [
-        pw.Row(
-          children: [
-            pw.Container(
-              width: 4,
-              height: 24,
-              decoration: pw.BoxDecoration(
-                color: primaryBlue,
-                borderRadius: pw.BorderRadius.circular(2),
+        pw.Container(
+          padding: const pw.EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+          child: pw.Row(
+            children: [
+              pw.Container(
+                width: 4,
+                height: 24,
+                decoration: pw.BoxDecoration(
+                  color: primaryBlue,
+                  borderRadius: pw.BorderRadius.circular(2),
+                ),
               ),
-            ),
-            pw.SizedBox(width: 10),
-            pw.Text(
-              'Participant Assignments',
-              style: pw.TextStyle(
-                fontSize: 18,
-                fontWeight: pw.FontWeight.bold,
-                color: darkGray,
+              pw.SizedBox(width: 10),
+              pw.Text(
+                'Team Assignments',
+                style: pw.TextStyle(
+                  fontSize: 18,
+                  fontWeight: pw.FontWeight.bold,
+                  color: darkGray,
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-        pw.SizedBox(height: 16),
+        pw.SizedBox(height: 8),
         ...participants
             .map((participant) => _buildParticipantCard(participant)),
       ],
