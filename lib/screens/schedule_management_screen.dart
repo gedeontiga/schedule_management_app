@@ -27,17 +27,22 @@ import '../models/permutation_request.dart';
 
 class ScheduleManagementScreen extends StatefulWidget {
   const ScheduleManagementScreen({super.key});
+
   @override
   ScheduleManagementScreenState createState() =>
       ScheduleManagementScreenState();
 }
 
-class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
+class ScheduleManagementScreenState extends State<ScheduleManagementScreen>
+    with SingleTickerProviderStateMixin {
   final ScheduleService _scheduleService = ScheduleService();
   final NotificationService _notificationService = NotificationService();
   final FlutterLocalNotificationsPlugin _notificationsPlugin =
       FlutterLocalNotificationsPlugin();
+
   StreamSubscription<Schedule?>? _scheduleSubscription;
+  StreamSubscription<List<Participant>>? _participantSubscription;
+
   Schedule? _schedule;
   List<FreeDay> _freeDays = [];
   String? _selectedDay1;
@@ -45,9 +50,7 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
   bool _isLoading = false;
   final Map<String, String> _alarms = {};
   bool _hasFetchedSchedule = false;
-  bool _showCalendarView = false;
   List<Participant> _participants = [];
-  StreamSubscription<List<Participant>>? _participantSubscription;
   String? _scheduleId;
   TimeOfDay? _selectedStartTime;
   TimeOfDay? _selectedEndTime;
@@ -57,9 +60,20 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
   bool _showPermutationRequestPopup = false;
   Map<String, dynamic>? _currentPermutationRequest;
 
+  late AnimationController _animationController;
+  late Animation<double> _fadeAnimation;
+
   @override
   void initState() {
     super.initState();
+    _animationController = AnimationController(
+      duration: const Duration(milliseconds: 400),
+      vsync: this,
+    );
+    _fadeAnimation = CurvedAnimation(
+      parent: _animationController,
+      curve: Curves.easeInOut,
+    );
   }
 
   @override
@@ -67,7 +81,6 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
     super.didChangeDependencies();
     if (!_hasFetchedSchedule) {
       _hasFetchedSchedule = true;
-
       _scheduleId = ModalRoute.of(context)!.settings.arguments as String;
       _fetchSchedule();
     }
@@ -76,7 +89,6 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
   Future<void> _updateFreeDays() async {
     setState(() => _isLoading = true);
     try {
-      // Validation is now async in Firebase version
       final isValid = await _scheduleService.validateFreeDays(
         _schedule!.id,
         FirebaseManager.currentUserId!,
@@ -95,13 +107,41 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Free days updated')),
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.white),
+                const SizedBox(width: 12),
+                Text('Free days updated successfully'),
+              ],
+            ),
+            backgroundColor: AppColors.success,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            margin: const EdgeInsets.all(16),
+          ),
         );
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.error_outline, color: Colors.white),
+                const SizedBox(width: 12),
+                Expanded(child: Text('Error: $e')),
+              ],
+            ),
+            backgroundColor: AppColors.error,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            margin: const EdgeInsets.all(16),
+          ),
         );
       }
     } finally {
@@ -127,7 +167,21 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Permutation request sent')),
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.send, color: Colors.white),
+                const SizedBox(width: 12),
+                Text('Swap request sent successfully'),
+              ],
+            ),
+            backgroundColor: AppColors.success,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            margin: const EdgeInsets.all(16),
+          ),
         );
       }
       setState(() {
@@ -137,7 +191,10 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
+          SnackBar(
+            content: Text('Error: $e'),
+            backgroundColor: AppColors.error,
+          ),
         );
       }
     } finally {
@@ -241,7 +298,6 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
       final userId = FirebaseManager.currentUserId;
       if (userId == null || _scheduleId == null) return;
 
-      // Replace Supabase query with Firebase:
       final snapshot = await FirebaseManager.firestore
           .collection('permutation_requests')
           .where('receiver_id', isEqualTo: userId)
@@ -265,7 +321,11 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
         }
       });
     } catch (e) {
-      // Handle error
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e')),
+        );
+      }
     }
   }
 
@@ -274,9 +334,19 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
 
     showDialog(
       context: context,
-      barrierDismissible: true, // Make it dismissible
+      barrierDismissible: true,
       builder: (context) => AlertDialog(
-        title: Text('Permutation Request'),
+        backgroundColor: AppColors.getSurface(context),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
+        title: Row(
+          children: [
+            Icon(Icons.swap_horiz, color: AppColors.primary),
+            SizedBox(width: 12),
+            Text('Swap Request'),
+          ],
+        ),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -285,41 +355,52 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
               'Someone wants to swap days with you:',
               style: TextStyle(fontWeight: FontWeight.w500),
             ),
-            SizedBox(height: 12),
+            SizedBox(height: 16),
             Row(
               children: [
                 Expanded(
                   child: Container(
                     padding: EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: AppColors.primary.withAlpha(50),
-                      borderRadius: BorderRadius.circular(8),
+                      color: AppColors.primary.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: AppColors.primary.withValues(alpha: 0.3),
+                      ),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          'They want your:',
+                          'They want:',
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
-                            color: AppColors.textPrimary,
+                            color: AppColors.primary,
+                            fontSize: 12,
                           ),
                         ),
                         SizedBox(height: 8),
-                        Text(_currentPermutationRequest!['receiver_day'] ?? ''),
+                        Text(
+                          _currentPermutationRequest!['receiver_day'] ?? '',
+                          style: TextStyle(fontSize: 13),
+                        ),
                       ],
                     ),
                   ),
                 ),
-                SizedBox(width: 16),
-                Icon(Icons.swap_horiz, color: AppColors.primary),
-                SizedBox(width: 16),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Icon(Icons.swap_horiz, color: AppColors.primary),
+                ),
                 Expanded(
                   child: Container(
                     padding: EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: AppColors.secondary.withAlpha(50),
-                      borderRadius: BorderRadius.circular(8),
+                      color: AppColors.secondary.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: AppColors.secondary.withValues(alpha: 0.3),
+                      ),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -328,11 +409,15 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                           'They offer:',
                           style: TextStyle(
                             fontWeight: FontWeight.bold,
-                            color: AppColors.textPrimary,
+                            color: AppColors.secondary,
+                            fontSize: 12,
                           ),
                         ),
                         SizedBox(height: 8),
-                        Text(_currentPermutationRequest!['sender_day'] ?? ''),
+                        Text(
+                          _currentPermutationRequest!['sender_day'] ?? '',
+                          style: TextStyle(fontSize: 13),
+                        ),
                       ],
                     ),
                   ),
@@ -345,7 +430,6 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
           TextButton(
             onPressed: () {
               Navigator.of(context).pop();
-              // Don't change the status, just dismiss the dialog
               setState(() {
                 _showPermutationRequestPopup = false;
               });
@@ -358,7 +442,7 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
               _handlePermutationResponse('rejected');
             },
             style: TextButton.styleFrom(
-              foregroundColor: Colors.red,
+              foregroundColor: AppColors.error,
             ),
             child: Text('Reject'),
           ),
@@ -369,6 +453,9 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
             },
             style: ElevatedButton.styleFrom(
               backgroundColor: AppColors.primary,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
             ),
             child: Text('Accept'),
           ),
@@ -381,15 +468,22 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
     final selectedAlarm = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        backgroundColor: AppColors.surface.withValues(alpha: 0.95),
+        backgroundColor: AppColors.getSurface(context),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(20),
+        ),
         title: Text(
             'Set Alarm for ${day.day} (${DateFormat('yyyy-MM-dd').format(day.date)})'),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: ['1h', '2h', '24h']
               .map((duration) => ListTile(
+                    leading: Icon(Icons.alarm, color: AppColors.primary),
                     title: Text('$duration before'),
                     onTap: () => Navigator.pop(context, duration),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
                   ))
               .toList(),
         ),
@@ -586,7 +680,6 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
           final availableDay =
               _schedule!.availableDays.firstWhere((d) => d.day == dayName);
 
-          // Check if the day has available time slots
           final dateKey = DateFormat('yyyy-MM-dd').format(normalizedDate);
           final hasAvailableSlots = _availableTimeSlots.containsKey(dateKey) &&
               _availableTimeSlots[dateKey]!.isNotEmpty;
@@ -638,7 +731,6 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
             allTakenSlots[dateKey] = [timeSlot];
           }
         } catch (e) {
-          // Skip invalid time slots
           continue;
         }
       }
@@ -752,173 +844,213 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
           return AlertDialog(
-            backgroundColor: AppColors.surface.withValues(alpha: 0.95),
+            backgroundColor: AppColors.getSurface(context),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(20),
+            ),
             title: Text(
               'Select Time for ${day.day} (${DateFormat('yyyy-MM-dd').format(day.date)})',
             ),
-            content: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text('Available time slots:'),
-                ...(_availableTimeSlots[dateKey] ?? []).map(
-                  (slot) => ListTile(
-                    title: Text('${slot.startTime} - ${slot.endTime}'),
-                    onTap: () {
-                      final startParts = slot.startTime.split(':');
-                      final endParts = slot.endTime.split(':');
-                      setDialogState(() {
-                        _selectedStartTime = TimeOfDay(
-                          hour: int.parse(startParts[0]),
-                          minute: int.parse(startParts[1]),
-                        );
-                        _selectedEndTime = TimeOfDay(
-                          hour: int.parse(endParts[0]),
-                          minute: int.parse(endParts[1]),
-                        );
-                      });
-                    },
-                    selected: _selectedStartTime != null &&
-                        _selectedEndTime != null &&
-                        _selectedStartTime!.hour.toString().padLeft(2, '0') ==
-                            slot.startTime.split(':')[0] &&
-                        _selectedStartTime!.minute.toString().padLeft(2, '0') ==
-                            slot.startTime.split(':')[1] &&
-                        _selectedEndTime!.hour.toString().padLeft(2, '0') ==
-                            slot.endTime.split(':')[0] &&
-                        _selectedEndTime!.minute.toString().padLeft(2, '0') ==
-                            slot.endTime.split(':')[1],
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: AppColors.info.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.info_outline,
+                            color: AppColors.info, size: 20),
+                        SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Available time slots:',
+                            style: TextStyle(
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-                const SizedBox(height: 16),
-                Row(
-                  children: [
-                    Expanded(
-                      child: InkWell(
-                        onTap: () async {
-                          final picked = await showTimePicker(
-                            context: context,
-                            initialTime: _selectedStartTime ??
-                                TimeOfDay(
-                                  hour: int.parse(
-                                      availableDay.startTime.split(':')[0]),
-                                  minute: int.parse(
-                                      availableDay.startTime.split(':')[1]),
-                                ),
-                            builder: (context, child) {
-                              return MediaQuery(
-                                data: MediaQuery.of(context).copyWith(
-                                  alwaysUse24HourFormat: true,
-                                ),
-                                child: child!,
-                              );
-                            },
-                          );
-                          if (picked != null) {
-                            final pickedMinutes =
-                                picked.hour * 60 + picked.minute;
-                            final isValid = _availableTimeSlots[dateKey]!.any(
-                              (slot) =>
-                                  pickedMinutes >= slot.startMinutes &&
-                                  pickedMinutes < slot.endMinutes,
+                  SizedBox(height: 12),
+                  ...(_availableTimeSlots[dateKey] ?? []).map(
+                    (slot) => Container(
+                      margin: EdgeInsets.only(bottom: 8),
+                      child: ListTile(
+                        leading:
+                            Icon(Icons.access_time, color: AppColors.primary),
+                        title: Text('${slot.startTime} - ${slot.endTime}'),
+                        onTap: () {
+                          final startParts = slot.startTime.split(':');
+                          final endParts = slot.endTime.split(':');
+                          setDialogState(() {
+                            _selectedStartTime = TimeOfDay(
+                              hour: int.parse(startParts[0]),
+                              minute: int.parse(startParts[1]),
                             );
-                            if (isValid) {
-                              setDialogState(() {
-                                _selectedStartTime = picked;
-                              });
-                            } else {
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                        'Selected start time is not available'),
-                                  ),
-                                );
-                              }
-                            }
-                          }
+                            _selectedEndTime = TimeOfDay(
+                              hour: int.parse(endParts[0]),
+                              minute: int.parse(endParts[1]),
+                            );
+                          });
                         },
-                        child: InputDecorator(
-                          decoration: const InputDecoration(
-                            labelText: 'Start Time',
-                            border: OutlineInputBorder(),
-                          ),
-                          child: Text(
-                            _selectedStartTime != null
-                                ? '${_selectedStartTime!.hour.toString().padLeft(2, '0')}:${_selectedStartTime!.minute.toString().padLeft(2, '0')}'
-                                : 'Select',
-                          ),
+                        selected: _selectedStartTime != null &&
+                            _selectedEndTime != null &&
+                            _selectedStartTime!.hour
+                                    .toString()
+                                    .padLeft(2, '0') ==
+                                slot.startTime.split(':')[0] &&
+                            _selectedStartTime!.minute
+                                    .toString()
+                                    .padLeft(2, '0') ==
+                                slot.startTime.split(':')[1] &&
+                            _selectedEndTime!.hour.toString().padLeft(2, '0') ==
+                                slot.endTime.split(':')[0] &&
+                            _selectedEndTime!.minute
+                                    .toString()
+                                    .padLeft(2, '0') ==
+                                slot.endTime.split(':')[1],
+                        selectedTileColor:
+                            AppColors.primary.withValues(alpha: 0.1),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(10),
                         ),
                       ),
                     ),
-                    const SizedBox(width: 16),
-                    Expanded(
-                      child: InkWell(
-                        onTap: () async {
-                          final picked = await showTimePicker(
-                            context: context,
-                            initialTime: _selectedEndTime ??
-                                TimeOfDay(
-                                  hour: int.parse(
-                                      availableDay.endTime.split(':')[0]),
-                                  minute: int.parse(
-                                      availableDay.endTime.split(':')[1]),
-                                ),
-                            builder: (context, child) {
-                              return MediaQuery(
-                                data: MediaQuery.of(context).copyWith(
-                                  alwaysUse24HourFormat: true,
-                                ),
-                                child: child!,
-                              );
-                            },
-                          );
-                          if (picked != null) {
-                            final pickedMinutes =
-                                picked.hour * 60 + picked.minute;
-                            final isValid = _availableTimeSlots[dateKey]!.any(
-                              (slot) =>
-                                  pickedMinutes > slot.startMinutes &&
-                                  pickedMinutes <= slot.endMinutes,
-                            );
-                            if (isValid) {
-                              setDialogState(() {
-                                _selectedEndTime = picked;
-                              });
-                            } else {
-                              if (context.mounted) {
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text(
-                                        'Selected end time is not available'),
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: InkWell(
+                          onTap: () async {
+                            final picked = await showTimePicker(
+                              context: context,
+                              initialTime: _selectedStartTime ??
+                                  TimeOfDay(
+                                    hour: int.parse(
+                                        availableDay.startTime.split(':')[0]),
+                                    minute: int.parse(
+                                        availableDay.startTime.split(':')[1]),
                                   ),
+                              builder: (context, child) {
+                                return MediaQuery(
+                                  data: MediaQuery.of(context)
+                                      .copyWith(alwaysUse24HourFormat: true),
+                                  child: child!,
                                 );
+                              },
+                            );
+                            if (picked != null) {
+                              final pickedMinutes =
+                                  picked.hour * 60 + picked.minute;
+                              final isValid = _availableTimeSlots[dateKey]!.any(
+                                  (slot) =>
+                                      pickedMinutes >= slot.startMinutes &&
+                                      pickedMinutes < slot.endMinutes);
+                              if (isValid) {
+                                setDialogState(() {
+                                  _selectedStartTime = picked;
+                                });
+                              } else {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                          'Selected start time is not available'),
+                                    ),
+                                  );
+                                }
                               }
                             }
-                          }
-                        },
-                        child: InputDecorator(
-                          decoration: const InputDecoration(
-                            labelText: 'End Time',
-                            border: OutlineInputBorder(),
-                          ),
-                          child: Text(
-                            _selectedEndTime != null
-                                ? '${_selectedEndTime!.hour.toString().padLeft(2, '0')}:${_selectedEndTime!.minute.toString().padLeft(2, '0')}'
-                                : 'Select',
+                          },
+                          child: InputDecorator(
+                            decoration: const InputDecoration(
+                              labelText: 'Start Time',
+                              border: OutlineInputBorder(),
+                            ),
+                            child: Text(
+                              _selectedStartTime != null
+                                  ? '${_selectedStartTime!.hour.toString().padLeft(2, '0')}:${_selectedStartTime!.minute.toString().padLeft(2, '0')}'
+                                  : 'Select',
+                            ),
                           ),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-              ],
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: InkWell(
+                          onTap: () async {
+                            final picked = await showTimePicker(
+                              context: context,
+                              initialTime: _selectedEndTime ??
+                                  TimeOfDay(
+                                    hour: int.parse(
+                                        availableDay.endTime.split(':')[0]),
+                                    minute: int.parse(
+                                        availableDay.endTime.split(':')[1]),
+                                  ),
+                              builder: (context, child) {
+                                return MediaQuery(
+                                  data: MediaQuery.of(context)
+                                      .copyWith(alwaysUse24HourFormat: true),
+                                  child: child!,
+                                );
+                              },
+                            );
+                            if (picked != null) {
+                              final pickedMinutes =
+                                  picked.hour * 60 + picked.minute;
+                              final isValid = _availableTimeSlots[dateKey]!.any(
+                                  (slot) =>
+                                      pickedMinutes > slot.startMinutes &&
+                                      pickedMinutes <= slot.endMinutes);
+                              if (isValid) {
+                                setDialogState(() {
+                                  _selectedEndTime = picked;
+                                });
+                              } else {
+                                if (context.mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    const SnackBar(
+                                      content: Text(
+                                          'Selected end time is not available'),
+                                    ),
+                                  );
+                                }
+                              }
+                            }
+                          },
+                          child: InputDecorator(
+                            decoration: const InputDecoration(
+                              labelText: 'End Time',
+                              border: OutlineInputBorder(),
+                            ),
+                            child: Text(
+                              _selectedEndTime != null
+                                  ? '${_selectedEndTime!.hour.toString().padLeft(2, '0')}:${_selectedEndTime!.minute.toString().padLeft(2, '0')}'
+                                  : 'Select',
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
                 child: const Text('CANCEL'),
               ),
-              TextButton(
+              ElevatedButton(
                 onPressed: () {
                   if (_selectedStartTime == null || _selectedEndTime == null) {
                     ScaffoldMessenger.of(context).showSnackBar(
@@ -970,6 +1102,12 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                     'endTime': _selectedEndTime!,
                   });
                 },
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                ),
                 child: const Text('CONFIRM'),
               ),
             ],
@@ -1023,21 +1161,53 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
       final action = await showDialog<String>(
         context: context,
         builder: (context) => AlertDialog(
-          backgroundColor: AppColors.surface.withValues(alpha: 0.95),
-          title:
-              Text('${day.day} (${DateFormat('yyyy-MM-dd').format(day.date)})'),
+          backgroundColor: AppColors.getSurface(context),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20),
+          ),
+          title: Row(
+            children: [
+              Icon(Icons.event, color: AppColors.primary),
+              SizedBox(width: 12),
+              Expanded(
+                child: Text(
+                    '${day.day} (${DateFormat('yyyy-MM-dd').format(day.date)})'),
+              ),
+            ],
+          ),
           content: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               ListTile(
-                leading: const Icon(Icons.access_time),
+                leading: Container(
+                  padding: EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(Icons.access_time, color: AppColors.primary),
+                ),
                 title: const Text('Select Specific Hours'),
                 onTap: () => Navigator.pop(context, 'select_hours'),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
               ),
+              SizedBox(height: 8),
               ListTile(
-                leading: const Icon(Icons.alarm),
+                leading: Container(
+                  padding: EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: AppColors.secondary.withValues(alpha: 0.1),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Icon(Icons.alarm, color: AppColors.secondary),
+                ),
                 title: const Text('Set Alarm'),
                 onTap: () => Navigator.pop(context, 'set_alarm'),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10),
+                ),
               ),
             ],
           ),
@@ -1078,11 +1248,9 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
   Future<void> _fetchSchedule() async {
     setState(() => _isLoading = true);
     try {
-      // Use stream instead of one-time fetch
       _scheduleSubscription?.cancel();
       _participantSubscription?.cancel();
 
-      // Get schedule stream
       _scheduleSubscription =
           _scheduleService.getSchedule(_scheduleId!).listen((schedule) {
         setState(() {
@@ -1092,7 +1260,6 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
         });
       });
 
-      // Get participants stream
       _participantSubscription =
           _scheduleService.getParticipants(_scheduleId!).listen((participants) {
         setState(() {
@@ -1119,6 +1286,7 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
       _alarms.addAll(alarmBox.toMap().cast<String, String>());
 
       await _fetchPendingPermutationRequests();
+      _animationController.forward();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1133,6 +1301,7 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
 
   @override
   void dispose() {
+    _animationController.dispose();
     _participantSubscription?.cancel();
     _scheduleSubscription?.cancel();
     _scheduleService.dispose();
@@ -1143,18 +1312,22 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
   Widget build(BuildContext context) {
     if (_schedule == null) {
       return Scaffold(
-        body: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [
-                AppColors.primary.withAlpha(26),
-                AppColors.background,
-              ],
-            ),
+        backgroundColor: AppColors.getBackground(context),
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(color: AppColors.primary),
+              const SizedBox(height: 16),
+              Text(
+                'Loading schedule...',
+                style: TextStyle(
+                  color: AppColors.getTextSecondary(context),
+                  fontSize: 14,
+                ),
+              ),
+            ],
           ),
-          child: const Center(child: CircularProgressIndicator()),
         ),
       );
     }
@@ -1162,481 +1335,390 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
     final weeklyAvailableDays = _getWeeklyAvailableDays();
 
     return Scaffold(
+      backgroundColor: AppColors.getBackground(context),
       appBar: AppBar(
         title: Text(
           _schedule!.name,
-          style: TextStyle(fontWeight: FontWeight.w600),
+          style: const TextStyle(fontWeight: FontWeight.w600),
         ),
-        backgroundColor: Colors.transparent,
+        backgroundColor: AppColors.getSurface(context),
         elevation: 0,
-        flexibleSpace: Container(
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                AppColors.primary.withValues(alpha: 0.6),
-                AppColors.secondary.withValues(alpha: 0.5),
-              ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-          ),
-        ),
         actions: [
           IconButton(
-            icon:
-                Icon(Icons.calendar_view_month, color: AppColors.textOnPrimary),
-            tooltip: 'Toggle Calendar View',
-            onPressed: () {
-              setState(() {
-                _showCalendarView = !_showCalendarView;
-              });
-            },
-          ),
-          IconButton(
-            icon: Icon(Icons.refresh_sharp, color: AppColors.textOnPrimary),
+            icon: Icon(Icons.refresh, color: AppColors.primary),
             tooltip: 'Refresh Schedule',
             onPressed: _fetchSchedule,
           ),
         ],
       ),
-      body: Container(
-        decoration: BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              AppColors.primary.withAlpha(13),
-              AppColors.secondary.withAlpha(13),
-            ],
-          ),
-        ),
-        child: SafeArea(
-          child: _isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : SingleChildScrollView(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      // Conditionally show either the Calendar View or the Select Free Days card
-                      if (_showCalendarView)
-                        Card(
-                          elevation: 8,
-                          shadowColor:
-                              AppColors.secondary.withValues(alpha: 0.5),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          color: Colors.white.withAlpha(243),
-                          child: Padding(
-                            padding: const EdgeInsets.all(20.0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+      body: _isLoading
+          ? Center(
+              child: CircularProgressIndicator(color: AppColors.primary),
+            )
+          : FadeTransition(
+              opacity: _fadeAnimation,
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(16.0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    // Calendar View Section
+                    CalendarView(
+                      schedule: _schedule!,
+                      freeDays: _freeDays,
+                      participants: _participants,
+                      onDaySelected: (day) => _selectAvailableDay(day),
+                    ),
+
+                    const SizedBox(height: 24),
+
+                    // My Selected Days Card
+                    if (_freeDays.isNotEmpty)
+                      Container(
+                        decoration: BoxDecoration(
+                          color: AppColors.getSurface(context),
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.05),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        padding: const EdgeInsets.all(20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
                               children: [
-                                Row(
-                                  children: [
-                                    Icon(
-                                      Icons.calendar_view_month,
-                                      color: AppColors.primary,
-                                      size: 28,
-                                    ),
-                                    SizedBox(width: 12),
-                                    Text(
-                                      'Calendar View',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.bold,
-                                        color: AppColors.textPrimary,
-                                      ),
-                                    ),
-                                  ],
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.primary
+                                        .withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Icon(
+                                    Icons.event_available,
+                                    color: AppColors.primary,
+                                    size: 22,
+                                  ),
                                 ),
-                                SizedBox(height: 16),
-                                SizedBox(
-                                  height: 340,
-                                  child: CalendarView(
-                                    schedule: _schedule!,
-                                    freeDays: _freeDays,
-                                    participants: _participants,
-                                    onDaySelected: (day) =>
-                                        _selectAvailableDay(day),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Text(
+                                    'My Selected Days',
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.getTextPrimary(context),
+                                    ),
+                                  ),
+                                ),
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.primary
+                                        .withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(20),
+                                  ),
+                                  child: Text(
+                                    '${_freeDays.length}',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.bold,
+                                      color: AppColors.primary,
+                                    ),
                                   ),
                                 ),
                               ],
                             ),
-                          ),
-                        )
-                      else
-                        Card(
-                          elevation: 8,
-                          shadowColor:
-                              AppColors.secondary.withValues(alpha: 0.5),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(20),
-                          ),
-                          color: Colors.white.withAlpha(243),
-                          child: Padding(
-                            padding: const EdgeInsets.all(20.0),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Row(
-                                  children: [
-                                    Icon(
-                                      Icons.event_available,
-                                      color: AppColors.primary,
-                                      size: 28,
+                            const SizedBox(height: 16),
+                            Wrap(
+                              spacing: 8,
+                              runSpacing: 8,
+                              children: _freeDays.map((day) {
+                                final hasAlarm = _alarms.containsKey(
+                                  '${day.day}_${DateFormat('yyyy-MM-dd').format(day.date)}',
+                                );
+                                return Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 12,
+                                    vertical: 10,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    gradient: LinearGradient(
+                                      colors: [
+                                        AppColors.primary,
+                                        AppColors.primary
+                                            .withValues(alpha: 0.8),
+                                      ],
                                     ),
-                                    SizedBox(width: 12),
-                                    Text(
-                                      'Select Your Free Days',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight: FontWeight.bold,
-                                        color: AppColors.textPrimary,
+                                    borderRadius: BorderRadius.circular(12),
+                                    boxShadow: [
+                                      BoxShadow(
+                                        color: AppColors.primary
+                                            .withValues(alpha: 0.3),
+                                        blurRadius: 6,
+                                        offset: const Offset(0, 2),
                                       ),
-                                    ),
-                                    Spacer(),
-                                    Container(
-                                      padding: EdgeInsets.symmetric(
-                                          horizontal: 12, vertical: 6),
-                                      decoration: BoxDecoration(
-                                        color: AppColors.primary.withAlpha(52),
-                                        borderRadius: BorderRadius.circular(20),
+                                    ],
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            day.day,
+                                            style: const TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 13,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            DateFormat('MMM d')
+                                                .format(day.date),
+                                            style: TextStyle(
+                                              color: Colors.white
+                                                  .withValues(alpha: 0.8),
+                                              fontSize: 11,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 2),
+                                          Text(
+                                            '${day.startTime} - ${day.endTime}',
+                                            style: TextStyle(
+                                              color: Colors.white
+                                                  .withValues(alpha: 0.7),
+                                              fontSize: 10,
+                                            ),
+                                          ),
+                                        ],
                                       ),
-                                      child: Text(
-                                        '${_freeDays.length}/${_schedule!.availableDays.length * weeklyAvailableDays.length}',
-                                        style: TextStyle(
-                                          fontWeight: FontWeight.bold,
-                                          color: AppColors.primary,
+                                      if (hasAlarm) ...[
+                                        const SizedBox(width: 8),
+                                        Icon(
+                                          Icons.alarm,
+                                          color: Colors.white,
+                                          size: 16,
+                                        ),
+                                      ],
+                                      const SizedBox(width: 8),
+                                      InkWell(
+                                        onTap: () => _removeFreeDay(day),
+                                        child: Container(
+                                          padding: const EdgeInsets.all(4),
+                                          decoration: BoxDecoration(
+                                            color: Colors.white
+                                                .withValues(alpha: 0.2),
+                                            borderRadius:
+                                                BorderRadius.circular(6),
+                                          ),
+                                          child: const Icon(
+                                            Icons.close,
+                                            color: Colors.white,
+                                            size: 16,
+                                          ),
                                         ),
                                       ),
-                                    ),
-                                  ],
+                                    ],
+                                  ),
+                                );
+                              }).toList(),
+                            ),
+                          ],
+                        ),
+                      ),
+
+                    const SizedBox(height: 24),
+
+                    // Quick Actions Card
+                    Container(
+                      decoration: BoxDecoration(
+                        color: AppColors.getSurface(context),
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.05),
+                            blurRadius: 10,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color:
+                                      AppColors.primary.withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(10),
                                 ),
-                                SizedBox(height: 16),
-                                Text(
-                                  _schedule!.isFullySet
-                                      ? 'Schedule is fully set. You can modify your free days.'
-                                      : 'Select your available days for each week:',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: _schedule!.isFullySet
-                                        ? AppColors.tertiary
-                                        : AppColors.textSecondary,
+                                child: Icon(
+                                  Icons.bolt,
+                                  color: AppColors.primary,
+                                  size: 22,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Text(
+                                'Quick Actions',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.getTextPrimary(context),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: GradientButton(
+                                  text: 'Save Days',
+                                  onPressed: _updateFreeDays,
+                                  isLoading: _isLoading,
+                                  icon: Icons.save,
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: GradientButton(
+                                  text: 'Export PDF',
+                                  onPressed: _exportPdf,
+                                  isLoading: _isLoading,
+                                  icon: Icons.picture_as_pdf,
+                                  enabled: _schedule!.isFullySet,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    const SizedBox(height: 24),
+
+                    // Day Swap Request Card
+                    if (_freeDays.isNotEmpty && weeklyAvailableDays.isNotEmpty)
+                      Container(
+                        decoration: BoxDecoration(
+                          color: AppColors.getSurface(context),
+                          borderRadius: BorderRadius.circular(16),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.05),
+                              blurRadius: 10,
+                              offset: const Offset(0, 4),
+                            ),
+                          ],
+                        ),
+                        padding: const EdgeInsets.all(20),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: AppColors.secondary
+                                        .withValues(alpha: 0.1),
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                  child: Icon(
+                                    Icons.swap_horiz,
+                                    color: AppColors.secondary,
+                                    size: 22,
                                   ),
                                 ),
-                                SizedBox(height: 20),
-                                ...weeklyAvailableDays
-                                    .asMap()
-                                    .entries
-                                    .map((entry) {
-                                  final weekIndex = entry.key;
-                                  final weekDays = entry.value;
-                                  return Column(
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        'Week ${weekIndex + 1}',
+                                        'Request Day Swap',
                                         style: TextStyle(
-                                          fontSize: 16,
-                                          fontWeight: FontWeight.w600,
-                                          color: AppColors.primary,
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.bold,
+                                          color:
+                                              AppColors.getTextPrimary(context),
                                         ),
                                       ),
-                                      SizedBox(height: 8),
-                                      Wrap(
-                                        spacing: 12,
-                                        runSpacing: 12,
-                                        children: weekDays.map((day) {
-                                          final isSelected = _freeDays
-                                              .any((d) => d.date == day.date);
-                                          final hasAlarm = _alarms.containsKey(
-                                              '${day.day}_${DateFormat('yyyy-MM-dd').format(day.date)}');
-                                          final selectedDay = isSelected
-                                              ? _freeDays.firstWhere(
-                                                  (d) =>
-                                                      d.date.year ==
-                                                          day.date.year &&
-                                                      d.date.month ==
-                                                          day.date.month &&
-                                                      d.date.day ==
-                                                          day.date.day,
-                                                  orElse: () => day)
-                                              : day;
-                                          return GestureDetector(
-                                            onTap: () =>
-                                                _selectAvailableDay(day),
-                                            onLongPress: isSelected
-                                                ? () => _removeFreeDay(day)
-                                                : null,
-                                            child: AnimatedContainer(
-                                              duration:
-                                                  Duration(milliseconds: 300),
-                                              padding: EdgeInsets.symmetric(
-                                                  horizontal: 16, vertical: 12),
-                                              decoration: BoxDecoration(
-                                                color: isSelected
-                                                    ? AppColors.primary
-                                                    : Colors.grey.shade100,
-                                                borderRadius:
-                                                    BorderRadius.circular(16),
-                                                boxShadow: [
-                                                  BoxShadow(
-                                                    color: isSelected
-                                                        ? AppColors.primary
-                                                            .withAlpha(100)
-                                                        : Colors.black
-                                                            .withAlpha(26),
-                                                    blurRadius: 8,
-                                                    offset: Offset(0, 3),
-                                                    spreadRadius: 1,
-                                                  ),
-                                                ],
-                                                border: isSelected
-                                                    ? Border.all(
-                                                        color: AppColors
-                                                            .secondary
-                                                            .withAlpha(150),
-                                                        width: 2)
-                                                    : null,
-                                              ),
-                                              child: Stack(
-                                                children: [
-                                                  Column(
-                                                    children: [
-                                                      Text(
-                                                        day.day,
-                                                        style: TextStyle(
-                                                          color: isSelected
-                                                              ? AppColors
-                                                                  .textOnPrimary
-                                                              : AppColors
-                                                                  .textPrimary,
-                                                          fontWeight:
-                                                              FontWeight.w600,
-                                                          fontSize: 15,
-                                                        ),
-                                                      ),
-                                                      SizedBox(height: 6),
-                                                      Text(
-                                                        DateFormat('dd-MM-yy')
-                                                            .format(day.date),
-                                                        style: TextStyle(
-                                                          color: isSelected
-                                                              ? AppColors
-                                                                  .textOnPrimary
-                                                                  .withAlpha(
-                                                                      220)
-                                                              : AppColors
-                                                                  .textSecondary,
-                                                          fontSize: 12,
-                                                        ),
-                                                      ),
-                                                      if (isSelected)
-                                                        Padding(
-                                                          padding:
-                                                              const EdgeInsets
-                                                                  .only(top: 6),
-                                                          child: Text(
-                                                            '${selectedDay.startTime} - ${selectedDay.endTime}',
-                                                            style: TextStyle(
-                                                              color: isSelected
-                                                                  ? AppColors
-                                                                      .textOnPrimary
-                                                                      .withAlpha(
-                                                                          180)
-                                                                  : AppColors
-                                                                      .textSecondary
-                                                                      .withAlpha(
-                                                                          180),
-                                                              fontSize: 10,
-                                                              fontWeight:
-                                                                  FontWeight
-                                                                      .w500,
-                                                            ),
-                                                          ),
-                                                        ),
-                                                    ],
-                                                  ),
-                                                  if (hasAlarm)
-                                                    Positioned(
-                                                      right: 0,
-                                                      top: 0,
-                                                      child: Container(
-                                                        width: 12,
-                                                        height: 12,
-                                                        decoration:
-                                                            BoxDecoration(
-                                                          color: Colors.red,
-                                                          shape:
-                                                              BoxShape.circle,
-                                                          border: Border.all(
-                                                            color: Colors.white,
-                                                            width: 1,
-                                                          ),
-                                                        ),
-                                                      ),
-                                                    ),
-                                                ],
-                                              ),
-                                            ),
-                                          );
-                                        }).toList(),
-                                      ),
-                                      SizedBox(height: 16),
-                                    ],
-                                  );
-                                }),
-                                SizedBox(height: 16),
-                                Row(
-                                  children: [
-                                    Expanded(
-                                      child: GradientButton(
-                                        text: 'Save Free Days',
-                                        onPressed: _updateFreeDays,
-                                        isLoading: _isLoading,
-                                        icon: Icons.save,
-                                      ),
-                                    ),
-                                    if (_freeDays.isNotEmpty) ...[
-                                      SizedBox(width: 12),
-                                      IconButton(
-                                        icon: Icon(
-                                          Icons.alarm,
-                                          color: AppColors.primary,
+                                      Text(
+                                        'Exchange one of your days',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: AppColors.getTextSecondary(
+                                              context),
                                         ),
-                                        onPressed: () {
-                                          showDialog(
-                                            context: context,
-                                            builder: (context) => AlertDialog(
-                                              title: Text('Configured Alarms'),
-                                              content: SizedBox(
-                                                width: double.maxFinite,
-                                                child: ListView.builder(
-                                                  shrinkWrap: true,
-                                                  itemCount: _alarms.length,
-                                                  itemBuilder:
-                                                      (context, index) {
-                                                    final key = _alarms.keys
-                                                        .elementAt(index);
-                                                    final duration =
-                                                        _alarms[key] ?? '';
-                                                    final parts =
-                                                        key.split('_');
-                                                    final day = parts[0];
-                                                    final date = parts[1];
-                                                    return ListTile(
-                                                      title:
-                                                          Text('$day ($date)'),
-                                                      subtitle: Text(
-                                                          '$duration before'),
-                                                      trailing: IconButton(
-                                                        icon:
-                                                            Icon(Icons.delete),
-                                                        onPressed: () {
-                                                          setState(() {
-                                                            _alarms.remove(key);
-                                                          });
-                                                          Navigator.pop(
-                                                              context);
-                                                        },
-                                                      ),
-                                                    );
-                                                  },
-                                                ),
-                                              ),
-                                              actions: [
-                                                TextButton(
-                                                  onPressed: () =>
-                                                      Navigator.pop(context),
-                                                  child: Text('Close'),
-                                                ),
-                                              ],
-                                            ),
-                                          );
-                                        },
-                                        tooltip: 'Manage Alarms',
                                       ),
                                     ],
-                                  ],
+                                  ),
                                 ),
                               ],
                             ),
-                          ),
-                        ),
-                      SizedBox(height: 24),
-                      Card(
-                        elevation: 8,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        color: Colors.white.withAlpha(243),
-                        child: Padding(
-                          padding: const EdgeInsets.all(20.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Row(
-                                children: [
-                                  Icon(
-                                    Icons.swap_horiz,
-                                    color: AppColors.primary,
-                                    size: 28,
-                                  ),
-                                  SizedBox(width: 12),
-                                  Text(
-                                    'Request Schedule Swap',
-                                    style: TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppColors.textPrimary,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                              SizedBox(height: 16),
-                              Text(
-                                'Swap one of your days with another participant:',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: AppColors.textSecondary,
-                                ),
-                              ),
-                              SizedBox(height: 20),
-                              Row(
-                                children: [
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'Your Day:',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.w500,
-                                          ),
+                            const SizedBox(height: 16),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Your Day:',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 13,
+                                          color:
+                                              AppColors.getTextPrimary(context),
                                         ),
-                                        SizedBox(height: 8),
-                                        DropdownButtonFormField<String>(
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Container(
+                                        decoration: BoxDecoration(
+                                          border: Border.all(
+                                            color:
+                                                AppColors.getDivider(context),
+                                          ),
+                                          borderRadius:
+                                              BorderRadius.circular(10),
+                                        ),
+                                        child: DropdownButtonFormField<String>(
                                           decoration: InputDecoration(
                                             prefixIcon: Icon(
                                               Icons.calendar_today,
                                               color: AppColors.primary,
+                                              size: 18,
                                             ),
-                                            border: OutlineInputBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                            ),
+                                            border: InputBorder.none,
                                             contentPadding:
-                                                EdgeInsets.symmetric(
+                                                const EdgeInsets.symmetric(
                                               horizontal: 12,
                                               vertical: 8,
                                             ),
                                           ),
                                           initialValue: _selectedDay1,
-                                          hint: Text('Select your day'),
+                                          hint: Text(
+                                            'Select',
+                                            style: TextStyle(fontSize: 13),
+                                          ),
                                           items: _freeDays
                                               .map(
                                                 (day) =>
@@ -1644,7 +1726,10 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                                   value:
                                                       '${day.day}_${DateFormat('yyyy-MM-dd').format(day.date)}',
                                                   child: Text(
-                                                      '${day.day} (${DateFormat('yyyy-MM-dd').format(day.date)})'),
+                                                    '${day.day} (${DateFormat('MMM d').format(day.date)})',
+                                                    style:
+                                                        TextStyle(fontSize: 13),
+                                                  ),
                                                 ),
                                               )
                                               .toList(),
@@ -1655,45 +1740,61 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                           },
                                           isExpanded: true,
                                         ),
-                                      ],
-                                    ),
+                                      ),
+                                    ],
                                   ),
-                                  SizedBox(width: 16),
-                                  Icon(
+                                ),
+                                Padding(
+                                  padding:
+                                      const EdgeInsets.symmetric(horizontal: 8),
+                                  child: Icon(
                                     Icons.swap_horiz,
-                                    color: AppColors.primary,
+                                    color: AppColors.secondary,
                                   ),
-                                  SizedBox(width: 16),
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          'Their Day:',
-                                          style: TextStyle(
-                                            fontWeight: FontWeight.w500,
-                                          ),
+                                ),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        'Their Day:',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w600,
+                                          fontSize: 13,
+                                          color:
+                                              AppColors.getTextPrimary(context),
                                         ),
-                                        SizedBox(height: 8),
-                                        DropdownButtonFormField<String>(
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Container(
+                                        decoration: BoxDecoration(
+                                          border: Border.all(
+                                            color:
+                                                AppColors.getDivider(context),
+                                          ),
+                                          borderRadius:
+                                              BorderRadius.circular(10),
+                                        ),
+                                        child: DropdownButtonFormField<String>(
                                           decoration: InputDecoration(
                                             prefixIcon: Icon(
                                               Icons.calendar_today,
-                                              color: AppColors.primary,
+                                              color: AppColors.secondary,
+                                              size: 18,
                                             ),
-                                            border: OutlineInputBorder(
-                                              borderRadius:
-                                                  BorderRadius.circular(12),
-                                            ),
+                                            border: InputBorder.none,
                                             contentPadding:
-                                                EdgeInsets.symmetric(
+                                                const EdgeInsets.symmetric(
                                               horizontal: 12,
                                               vertical: 8,
                                             ),
                                           ),
                                           initialValue: _selectedDay2,
-                                          hint: Text('Select their day'),
+                                          hint: Text(
+                                            'Select',
+                                            style: TextStyle(fontSize: 13),
+                                          ),
                                           items: weeklyAvailableDays
                                               .expand((week) => week)
                                               .where((day) => !_freeDays.any(
@@ -1704,7 +1805,10 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                                   value:
                                                       '${day.day}_${DateFormat('yyyy-MM-dd').format(day.date)}',
                                                   child: Text(
-                                                      '${day.day} (${DateFormat('yyyy-MM-dd').format(day.date)})'),
+                                                    '${day.day} (${DateFormat('MMM d').format(day.date)})',
+                                                    style:
+                                                        TextStyle(fontSize: 13),
+                                                  ),
                                                 ),
                                               )
                                               .toList(),
@@ -1715,13 +1819,16 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                           },
                                           isExpanded: true,
                                         ),
-                                      ],
-                                    ),
+                                      ),
+                                    ],
                                   ),
-                                ],
-                              ),
-                              SizedBox(height: 20),
-                              GradientButton(
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 16),
+                            SizedBox(
+                              width: double.infinity,
+                              child: GradientButton(
                                 text: 'Send Swap Request',
                                 onPressed: _requestPermutation,
                                 isLoading: _isLoading,
@@ -1729,203 +1836,266 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen> {
                                 enabled: _selectedDay1 != null &&
                                     _selectedDay2 != null,
                               ),
-                            ],
-                          ),
+                            ),
+                          ],
                         ),
                       ),
-                      SizedBox(height: 24),
-                      Card(
-                        elevation: 8,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        color: Colors.white.withAlpha(243),
-                        child: Padding(
-                          padding: const EdgeInsets.all(20.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+
+                    const SizedBox(height: 24),
+
+                    // Schedule Info Card
+                    Container(
+                      decoration: BoxDecoration(
+                        color: AppColors.getSurface(context),
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.05),
+                            blurRadius: 10,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
                             children: [
-                              Row(
-                                children: [
-                                  Icon(
-                                    Icons.info_outline,
-                                    color: AppColors.primary,
-                                    size: 28,
-                                  ),
-                                  SizedBox(width: 12),
-                                  Text(
-                                    'Schedule Information',
-                                    style: TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppColors.textPrimary,
-                                    ),
-                                  ),
-                                ],
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: AppColors.info.withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Icon(
+                                  Icons.info_outline,
+                                  color: AppColors.info,
+                                  size: 22,
+                                ),
                               ),
-                              SizedBox(height: 20),
-                              InfoTile(
-                                icon: Icons.description,
-                                label: 'Description',
-                                value:
-                                    _schedule!.description ?? 'No description',
-                              ),
-                              InfoTile(
-                                icon: Icons.access_time,
-                                label: 'Duration',
-                                value: _schedule!.duration,
-                              ),
-                              InfoTile(
-                                icon: Icons.calendar_today,
-                                label: 'Created At',
-                                value: DateFormat('yyyy-MM-dd')
-                                    .format(_schedule!.createdAt),
-                              ),
-                              InfoTile(
-                                icon: Icons.group,
-                                label: 'Participants',
-                                value: '${_schedule!.participants.length}',
-                              ),
-                              InfoTile(
-                                icon: Icons.check_circle_outline,
-                                label: 'Status',
-                                value: _schedule!.isFullySet
-                                    ? 'Fully Set'
-                                    : 'Pending',
-                                valueColor: _schedule!.isFullySet
-                                    ? Colors.green
-                                    : Colors.orange,
-                              ),
-                              SizedBox(height: 20),
-                              GradientButton(
-                                text: 'Export Schedule as PDF',
-                                onPressed: _exportPdf,
-                                isLoading: _isLoading,
-                                icon: Icons.picture_as_pdf,
-                                enabled: _schedule!.isFullySet,
+                              const SizedBox(width: 12),
+                              Text(
+                                'Schedule Information',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.getTextPrimary(context),
+                                ),
                               ),
                             ],
                           ),
-                        ),
+                          const SizedBox(height: 16),
+                          InfoTile(
+                            icon: Icons.description,
+                            label: 'Description',
+                            value: _schedule!.description ?? 'No description',
+                          ),
+                          InfoTile(
+                            icon: Icons.access_time,
+                            label: 'Duration',
+                            value: _schedule!.duration,
+                          ),
+                          InfoTile(
+                            icon: Icons.calendar_today,
+                            label: 'Created At',
+                            value: DateFormat('MMM d, yyyy')
+                                .format(_schedule!.createdAt),
+                          ),
+                          InfoTile(
+                            icon: Icons.group,
+                            label: 'Participants',
+                            value: '${_schedule!.participants.length}',
+                          ),
+                          InfoTile(
+                            icon: Icons.check_circle_outline,
+                            label: 'Status',
+                            value:
+                                _schedule!.isFullySet ? 'Complete' : 'Pending',
+                            valueColor: _schedule!.isFullySet
+                                ? AppColors.success
+                                : AppColors.warning,
+                          ),
+                        ],
                       ),
-                      SizedBox(height: 24),
-                      Card(
-                        elevation: 8,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(20),
-                        ),
-                        color: Colors.white.withAlpha(243),
-                        child: Padding(
-                          padding: const EdgeInsets.all(20.0),
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
+                    ),
+
+                    const SizedBox(height: 24),
+
+                    // Participants Progress Card
+                    Container(
+                      decoration: BoxDecoration(
+                        color: AppColors.getSurface(context),
+                        borderRadius: BorderRadius.circular(16),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.05),
+                            blurRadius: 10,
+                            offset: const Offset(0, 4),
+                          ),
+                        ],
+                      ),
+                      padding: const EdgeInsets.all(20),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
                             children: [
-                              Row(
-                                children: [
-                                  Icon(
-                                    Icons.people_outline,
-                                    color: AppColors.primary,
-                                    size: 28,
-                                  ),
-                                  SizedBox(width: 12),
-                                  Text(
-                                    'Participants Status',
-                                    style: TextStyle(
-                                      fontSize: 18,
-                                      fontWeight: FontWeight.bold,
-                                      color: AppColors.textPrimary,
-                                    ),
-                                  ),
-                                ],
+                              Container(
+                                padding: const EdgeInsets.all(8),
+                                decoration: BoxDecoration(
+                                  color: AppColors.secondary
+                                      .withValues(alpha: 0.1),
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                child: Icon(
+                                  Icons.people_outline,
+                                  color: AppColors.secondary,
+                                  size: 22,
+                                ),
                               ),
-                              SizedBox(height: 20),
-                              ListView.builder(
-                                shrinkWrap: true,
-                                physics: NeverScrollableScrollPhysics(),
-                                itemCount: _participants.length,
-                                itemBuilder: (context, index) {
-                                  final participant = _participants[index];
-                                  final isCurrentUser = participant.userId ==
-                                      FirebaseManager.currentUserId;
-                                  final completionPercentage =
-                                      participant.freeDays.length /
-                                          (_schedule!.availableDays.length *
-                                              weeklyAvailableDays.length) *
-                                          100;
-                                  return Padding(
-                                    padding:
-                                        const EdgeInsets.only(bottom: 12.0),
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
+                              const SizedBox(width: 12),
+                              Text(
+                                'Participants Progress',
+                                style: TextStyle(
+                                  fontSize: 18,
+                                  fontWeight: FontWeight.bold,
+                                  color: AppColors.getTextPrimary(context),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 16),
+                          ListView.builder(
+                            shrinkWrap: true,
+                            physics: const NeverScrollableScrollPhysics(),
+                            itemCount: _participants.length,
+                            itemBuilder: (context, index) {
+                              final participant = _participants[index];
+                              final isCurrentUser = participant.userId ==
+                                  FirebaseManager.currentUserId;
+                              final completionPercentage =
+                                  participant.freeDays.length /
+                                      (_schedule!.availableDays.length *
+                                          weeklyAvailableDays.length) *
+                                      100;
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 16),
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  color: isCurrentUser
+                                      ? AppColors.primary
+                                          .withValues(alpha: 0.05)
+                                      : AppColors.getBackground(context)
+                                          .withValues(alpha: 0.5),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: isCurrentUser
+                                      ? Border.all(
+                                          color: AppColors.primary
+                                              .withValues(alpha: 0.2),
+                                          width: 2,
+                                        )
+                                      : null,
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
                                       children: [
-                                        Row(
-                                          children: [
-                                            Icon(
-                                              isCurrentUser
-                                                  ? Icons.person
-                                                  : Icons.person_outline,
+                                        Container(
+                                          padding: const EdgeInsets.all(8),
+                                          decoration: BoxDecoration(
+                                            color: isCurrentUser
+                                                ? AppColors.primary
+                                                    .withValues(alpha: 0.1)
+                                                : AppColors.getTextSecondary(
+                                                        context)
+                                                    .withValues(alpha: 0.1),
+                                            borderRadius:
+                                                BorderRadius.circular(8),
+                                          ),
+                                          child: Icon(
+                                            isCurrentUser
+                                                ? Icons.person
+                                                : Icons.person_outline,
+                                            color: isCurrentUser
+                                                ? AppColors.primary
+                                                : AppColors.getTextSecondary(
+                                                    context),
+                                            size: 20,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        Expanded(
+                                          child: Text(
+                                            isCurrentUser
+                                                ? 'You'
+                                                : 'Participant ${index + 1}',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.w600,
+                                              fontSize: 15,
                                               color: isCurrentUser
                                                   ? AppColors.primary
-                                                  : AppColors.textSecondary,
-                                              size: 20,
+                                                  : AppColors.getTextPrimary(
+                                                      context),
                                             ),
-                                            SizedBox(width: 8),
-                                            Text(
-                                              isCurrentUser
-                                                  ? 'You'
-                                                  : 'Participant ${index + 1}',
-                                              style: TextStyle(
-                                                fontWeight: FontWeight.w500,
-                                                color: isCurrentUser
-                                                    ? AppColors.primary
-                                                    : AppColors.textPrimary,
-                                              ),
-                                            ),
-                                            Spacer(),
-                                            Text(
-                                              '${completionPercentage.toStringAsFixed(0)}%',
-                                              style: TextStyle(
-                                                fontWeight: FontWeight.bold,
-                                                color:
-                                                    completionPercentage >= 100
-                                                        ? Colors.green
-                                                        : AppColors.secondary,
-                                              ),
-                                            ),
-                                          ],
+                                          ),
                                         ),
-                                        SizedBox(height: 6),
-                                        ClipRRect(
-                                          borderRadius:
-                                              BorderRadius.circular(4),
-                                          child: LinearProgressIndicator(
-                                            value: completionPercentage / 100,
-                                            backgroundColor:
-                                                Colors.grey.shade200,
-                                            valueColor:
-                                                AlwaysStoppedAnimation<Color>(
-                                              completionPercentage >= 100
-                                                  ? Colors.green
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                            horizontal: 12,
+                                            vertical: 6,
+                                          ),
+                                          decoration: BoxDecoration(
+                                            color: completionPercentage >= 100
+                                                ? AppColors.success
+                                                    .withValues(alpha: 0.1)
+                                                : AppColors.secondary
+                                                    .withValues(alpha: 0.1),
+                                            borderRadius:
+                                                BorderRadius.circular(20),
+                                          ),
+                                          child: Text(
+                                            '${completionPercentage.toStringAsFixed(0)}%',
+                                            style: TextStyle(
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 13,
+                                              color: completionPercentage >= 100
+                                                  ? AppColors.success
                                                   : AppColors.secondary,
                                             ),
-                                            minHeight: 8,
                                           ),
                                         ),
                                       ],
                                     ),
-                                  );
-                                },
-                              ),
-                            ],
+                                    const SizedBox(height: 12),
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(8),
+                                      child: LinearProgressIndicator(
+                                        value: completionPercentage / 100,
+                                        backgroundColor:
+                                            AppColors.getDivider(context),
+                                        valueColor:
+                                            AlwaysStoppedAnimation<Color>(
+                                          completionPercentage >= 100
+                                              ? AppColors.success
+                                              : AppColors.secondary,
+                                        ),
+                                        minHeight: 8,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              );
+                            },
                           ),
-                        ),
+                        ],
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
-        ),
-      ),
+              ),
+            ),
     );
   }
 }

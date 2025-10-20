@@ -4,7 +4,6 @@ import '../core/utils/firebase_manager.dart';
 import 'login_screen.dart';
 import 'home_screen.dart';
 
-/// Wrapper widget that handles authentication state and offline mode
 class AuthWrapper extends StatelessWidget {
   const AuthWrapper({super.key});
 

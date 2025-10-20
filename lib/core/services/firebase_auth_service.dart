@@ -1,4 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../utils/firebase_manager.dart';
@@ -52,28 +53,44 @@ class FirebaseAuthService {
 
   Future<UserCredential> signInWithGoogle() async {
     try {
-      // Trigger the authentication flow (v7.x API)
-      final GoogleSignInAccount googleUser =
-          await GoogleSignIn.instance.authenticate();
+      if (kIsWeb) {
+        final GoogleAuthProvider provider = GoogleAuthProvider();
+        final userCredential = await _auth.signInWithPopup(provider);
 
-      // Obtain the auth details from the request
+        if (userCredential.user != null) {
+          await _createUserDocument(
+            userId: userCredential.user!.uid,
+            email: userCredential.user!.email ?? '',
+            username: userCredential.user!.displayName ?? 'User',
+            authMethod: 'google',
+            photoUrl: userCredential.user!.photoURL,
+          );
+        }
+
+        return userCredential;
+      }
+
+      await _googleSignIn.initialize();
+
+      final GoogleSignInAccount googleUser = await _googleSignIn.authenticate();
+
       final GoogleSignInAuthentication googleAuth = googleUser.authentication;
 
-      // Create a new credential (only idToken is required)
       final credential = GoogleAuthProvider.credential(
         idToken: googleAuth.idToken,
       );
 
-      // Once signed in, return the UserCredential
       final userCredential = await _auth.signInWithCredential(credential);
 
-      await _createUserDocument(
-        userId: userCredential.user!.uid,
-        email: userCredential.user!.email!,
-        username: userCredential.user!.displayName ?? 'User',
-        authMethod: 'google',
-        photoUrl: userCredential.user!.photoURL,
-      );
+      if (userCredential.user != null) {
+        await _createUserDocument(
+          userId: userCredential.user!.uid,
+          email: userCredential.user!.email ?? '',
+          username: userCredential.user!.displayName ?? 'User',
+          authMethod: 'google',
+          photoUrl: userCredential.user!.photoURL,
+        );
+      }
 
       return userCredential;
     } on FirebaseAuthException catch (e) {

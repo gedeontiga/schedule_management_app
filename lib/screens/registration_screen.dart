@@ -265,7 +265,7 @@ class RegistrationScreenState extends State<RegistrationScreen>
                                               borderRadius:
                                                   BorderRadius.circular(16),
                                               child: Image.asset(
-                                                'assets/schedulo_logo.png',
+                                                'assets/schedulo.png',
                                                 fit: BoxFit.contain,
                                                 errorBuilder: (context, error,
                                                     stackTrace) {

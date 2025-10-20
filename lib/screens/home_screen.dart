@@ -1,24 +1,25 @@
 import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import '../core/utils/firebase_manager.dart';
 import '../core/widgets/expandable_description.dart';
 import 'schedule_creation_screen.dart';
 import 'package:local_auth/local_auth.dart';
 import '../core/constants/app_colors.dart';
 import '../core/services/schedule_service.dart';
+import '../core/theme/theme_provider.dart';
 import '../models/schedule.dart';
 import 'package:intl/intl.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
+
   @override
   HomeScreenState createState() => HomeScreenState();
 }
 
-class HomeScreenState extends State<HomeScreen>
-    with SingleTickerProviderStateMixin {
+class HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
   final ScheduleService _scheduleService = ScheduleService();
   final LocalAuthentication _auth = LocalAuthentication();
   List<Schedule> _schedules = [];
@@ -26,7 +27,9 @@ class HomeScreenState extends State<HomeScreen>
   bool _isError = false;
   String? _errorMessage;
   late AnimationController _animationController;
+  late AnimationController _fabAnimController;
   late Animation<double> _fadeAnimation;
+  late Animation<double> _fabScaleAnimation;
   String? _currentUserId;
   late StreamSubscription<List<Schedule>> _scheduleSubscription;
   bool _canUseBiometrics = false;
@@ -68,15 +71,29 @@ class HomeScreenState extends State<HomeScreen>
   void initState() {
     super.initState();
     _currentUserId = FirebaseManager.currentUserId;
+
     _animationController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1000),
+      duration: const Duration(milliseconds: 800),
     );
+    _fabAnimController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 600),
+    );
+
     _fadeAnimation = CurvedAnimation(
       parent: _animationController,
       curve: Curves.easeInOut,
     );
+    _fabScaleAnimation = CurvedAnimation(
+      parent: _fabAnimController,
+      curve: Curves.elasticOut,
+    );
+
     _animationController.forward();
+    Future.delayed(const Duration(milliseconds: 300), () {
+      if (mounted) _fabAnimController.forward();
+    });
 
     setState(() {
       _isLoading = true;
@@ -107,19 +124,14 @@ class HomeScreenState extends State<HomeScreen>
 
   Future<bool> _authenticateWithBiometrics(BuildContext context) async {
     if (!_canUseBiometrics) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content:
-              Text('Biometric authentication not available on this device'),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
+      _showSnackBar('Biometric authentication not available', isError: true);
       return false;
     }
 
     try {
       String localizedReason;
       final biometrics = await _auth.getAvailableBiometrics();
+
       if (biometrics.contains(BiometricType.face)) {
         localizedReason =
             'Authenticate with Face ID to access schedule details';
@@ -164,37 +176,20 @@ class HomeScreenState extends State<HomeScreen>
         default:
           errorMessage = 'Authentication error: ${e.message}';
       }
-
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(errorMessage),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
+      _showSnackBar(errorMessage, isError: true);
       return false;
     } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Authentication error: ${e.toString()}'),
-            behavior: SnackBarBehavior.floating,
-          ),
-        );
-      }
+      _showSnackBar('Authentication error: ${e.toString()}', isError: true);
       return false;
     }
   }
 
   Future<void> _authenticateAndNavigate(String scheduleId) async {
     HapticFeedback.selectionClick();
-
     final authenticated = await _authenticateWithBiometrics(context);
 
     if (authenticated && mounted) {
       await Future.delayed(const Duration(milliseconds: 200));
-
       if (mounted) {
         Navigator.pushNamed(context, '/manage-schedule', arguments: scheduleId);
       }
@@ -203,40 +198,50 @@ class HomeScreenState extends State<HomeScreen>
 
   Future<void> _deleteSchedule(Schedule schedule) async {
     try {
-      await _scheduleService
-          .deleteSchedule(schedule.id); // No return value needed
-
+      await _scheduleService.deleteSchedule(schedule.id);
       if (mounted) {
-        // The stream will automatically update the list
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('${schedule.name} deleted successfully'),
-            behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 2),
-          ),
-        );
+        _showSnackBar('${schedule.name} deleted successfully', isSuccess: true);
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: ${e.toString()}'),
-            behavior: SnackBarBehavior.floating,
-            action: SnackBarAction(
-              label: 'Retry',
-              onPressed: () => _deleteSchedule(schedule),
-            ),
-          ),
-        );
+        _showSnackBar('Error: ${e.toString()}', isError: true);
       }
     }
+  }
+
+  void _showSnackBar(String message,
+      {bool isError = false, bool isSuccess = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(
+              isSuccess
+                  ? Icons.check_circle
+                  : (isError ? Icons.error_outline : Icons.info_outline),
+              color: Colors.white,
+            ),
+            const SizedBox(width: 12),
+            Expanded(child: Text(message)),
+          ],
+        ),
+        backgroundColor: isSuccess
+            ? AppColors.success
+            : (isError ? AppColors.error : AppColors.primary),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   @override
   void dispose() {
     _animationController.dispose();
+    _fabAnimController.dispose();
     _scheduleSubscription.cancel();
-    _scheduleService.dispose(); // Add this to clean up connectivity listener
+    _scheduleService.dispose();
     super.dispose();
   }
 
@@ -247,17 +252,9 @@ class HomeScreenState extends State<HomeScreen>
         _isError = false;
       });
 
-      final userId = FirebaseManager.currentUserId; // Changed
-
+      final userId = FirebaseManager.currentUserId;
       if (userId == null) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Error: User not logged in'),
-              behavior: SnackBarBehavior.floating,
-            ),
-          );
-        }
+        _showSnackBar('Error: User not logged in', isError: true);
         setState(() {
           _isLoading = false;
           _isError = true;
@@ -266,10 +263,7 @@ class HomeScreenState extends State<HomeScreen>
         return;
       }
 
-      // Cancel existing subscription
       await _scheduleSubscription.cancel();
-
-      // Re-subscribe to the stream
       _scheduleSubscription = _scheduleService.getUserSchedules(userId).listen(
         (schedules) {
           if (mounted) {
@@ -281,16 +275,7 @@ class HomeScreenState extends State<HomeScreen>
         },
         onError: (e) {
           if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text('Error fetching schedules'),
-                behavior: SnackBarBehavior.floating,
-                action: SnackBarAction(
-                  label: 'Retry',
-                  onPressed: _fetchSchedules,
-                ),
-              ),
-            );
+            _showSnackBar('Error fetching schedules', isError: true);
             setState(() {
               _isLoading = false;
               _isError = true;
@@ -301,16 +286,7 @@ class HomeScreenState extends State<HomeScreen>
       );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error fetching schedules'),
-            behavior: SnackBarBehavior.floating,
-            action: SnackBarAction(
-              label: 'Retry',
-              onPressed: _fetchSchedules,
-            ),
-          ),
-        );
+        _showSnackBar('Error fetching schedules', isError: true);
         setState(() {
           _isLoading = false;
           _isError = true;
@@ -337,36 +313,46 @@ class HomeScreenState extends State<HomeScreen>
   Widget build(BuildContext context) {
     final screenWidth = MediaQuery.of(context).size.width;
     final isLargeScreen = screenWidth > 600;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final themeProvider = Provider.of<ThemeProvider>(context);
 
     return Scaffold(
       body: Container(
         decoration: BoxDecoration(
           gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              AppColors.primary.withValues(alpha: 0.5),
-              AppColors.secondary.withValues(alpha: 0.5),
-            ],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: isDark
+                ? [
+                    AppColors.darkBackground,
+                    AppColors.darkSurface,
+                    AppColors.darkBackground,
+                  ]
+                : [
+                    AppColors.lightBackground,
+                    AppColors.primary.withValues(alpha: 0.05),
+                    AppColors.lightSurface,
+                  ],
           ),
         ),
         child: SafeArea(
           child: Column(
             children: [
-              _buildAppBar(isLargeScreen),
+              _buildAppBar(isLargeScreen, isDark, themeProvider),
               Expanded(
                 child: RefreshIndicator(
                   onRefresh: _fetchSchedules,
+                  color: AppColors.primary,
                   child: Center(
                     child: ConstrainedBox(
                       constraints: const BoxConstraints(maxWidth: 800),
                       child: _isLoading
-                          ? _buildLoadingState(isLargeScreen)
+                          ? _buildLoadingState(isLargeScreen, isDark)
                           : _isError
-                              ? _buildErrorState()
+                              ? _buildErrorState(isDark)
                               : _schedules.isEmpty
-                                  ? _buildEmptyState()
-                                  : _buildScheduleList(isLargeScreen),
+                                  ? _buildEmptyState(isDark)
+                                  : _buildScheduleList(isLargeScreen, isDark),
                     ),
                   ),
                 ),
@@ -375,26 +361,43 @@ class HomeScreenState extends State<HomeScreen>
           ),
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () => _navigateToCreateSchedule(),
-        backgroundColor: AppColors.primary,
-        tooltip: 'Create Schedule',
-        elevation: 6,
-        icon: const Icon(Icons.add, color: AppColors.textOnPrimary),
-        label: const Text(
-          'New Schedule',
-          style: TextStyle(
-              color: AppColors.textOnPrimary, fontWeight: FontWeight.w600),
+      floatingActionButton: ScaleTransition(
+        scale: _fabScaleAnimation,
+        child: FloatingActionButton.extended(
+          onPressed: () => _navigateToCreateSchedule(),
+          backgroundColor: AppColors.primary,
+          tooltip: 'Create Schedule',
+          elevation: 6,
+          icon: const Icon(Icons.add, color: Colors.white),
+          label: const Text(
+            'New Schedule',
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+              fontSize: 15,
+            ),
+          ),
         ),
       ),
     );
   }
 
-  Widget _buildAppBar(bool isLargeScreen) {
-    return Padding(
+  Widget _buildAppBar(
+      bool isLargeScreen, bool isDark, ThemeProvider themeProvider) {
+    return Container(
       padding: EdgeInsets.symmetric(
         horizontal: isLargeScreen ? 24.0 : 16.0,
-        vertical: 12.0,
+        vertical: 16.0,
+      ),
+      decoration: BoxDecoration(
+        color: isDark ? AppColors.darkSurface : Colors.white,
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.05),
+            blurRadius: 10,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -402,16 +405,31 @@ class HomeScreenState extends State<HomeScreen>
           Expanded(
             child: Row(
               children: [
-                if (!isLargeScreen)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 10.0),
-                    child: CircleAvatar(
-                      radius: 18,
-                      backgroundImage:
-                          const AssetImage('assets/schedulo_logo.png'),
-                      backgroundColor: AppColors.primary.withValues(alpha: 0.2),
+                Hero(
+                  tag: 'app_logo',
+                  child: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [AppColors.primary, AppColors.secondary],
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: [
+                        BoxShadow(
+                          color: AppColors.primary.withValues(alpha: 0.3),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
+                        ),
+                      ],
+                    ),
+                    child: Image.asset(
+                      'assets/schedulo.png',
+                      width: 32,
+                      height: 32,
                     ),
                   ),
+                ),
+                const SizedBox(width: 12),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -420,23 +438,21 @@ class HomeScreenState extends State<HomeScreen>
                       Text(
                         'Schedulo',
                         style: TextStyle(
-                          fontSize: isLargeScreen ? 26 : 22,
+                          fontSize: isLargeScreen ? 24 : 20,
                           fontWeight: FontWeight.w900,
-                          color: AppColors.textOnPrimary,
-                          shadows: [
-                            BoxShadow(
-                              blurRadius: 4,
-                              color: AppColors.secondary.withValues(alpha: 0.8),
-                              offset: const Offset(2, 2),
-                            ),
-                          ],
+                          color: isDark
+                              ? AppColors.darkTextPrimary
+                              : AppColors.primary,
+                          letterSpacing: 0.5,
                         ),
                       ),
                       Text(
-                        'Manage your schedules with ease',
+                        'Manage schedules with ease',
                         style: TextStyle(
-                          fontSize: isLargeScreen ? 16 : 14,
-                          color: AppColors.secondary.withValues(alpha: 0.8),
+                          fontSize: isLargeScreen ? 13 : 12,
+                          color: isDark
+                              ? AppColors.darkTextSecondary
+                              : AppColors.lightTextSecondary,
                           fontWeight: FontWeight.w400,
                         ),
                       ),
@@ -446,18 +462,38 @@ class HomeScreenState extends State<HomeScreen>
               ],
             ),
           ),
-          if (isLargeScreen)
-            CircleAvatar(
-              radius: 24,
-              backgroundImage: const AssetImage('assets/schedulo_logo.png'),
-              backgroundColor: AppColors.primary.withValues(alpha: 0.2),
-            ),
+          Row(
+            children: [
+              IconButton(
+                icon: Icon(
+                  isDark ? Icons.light_mode : Icons.dark_mode,
+                  color: isDark ? AppColors.darkTextPrimary : AppColors.primary,
+                ),
+                onPressed: () {
+                  themeProvider.toggleTheme();
+                  HapticFeedback.lightImpact();
+                },
+                tooltip: 'Toggle theme',
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                icon: Icon(
+                  Icons.person_outline,
+                  color: isDark ? AppColors.darkTextPrimary : AppColors.primary,
+                ),
+                onPressed: () {
+                  // Navigate to profile
+                },
+                tooltip: 'Profile',
+              ),
+            ],
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildLoadingState(bool isLargeScreen) {
+  Widget _buildLoadingState(bool isLargeScreen, bool isDark) {
     return Padding(
       padding: EdgeInsets.symmetric(
         horizontal: isLargeScreen ? 24.0 : 16.0,
@@ -467,23 +503,24 @@ class HomeScreenState extends State<HomeScreen>
         itemCount: 3,
         itemBuilder: (context, index) {
           return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 8.0),
+            padding: const EdgeInsets.symmetric(vertical: 8.0),
             child: Container(
-              height: 120,
+              height: 140,
               decoration: BoxDecoration(
-                color: AppColors.background.withValues(alpha: 0.7),
-                borderRadius: BorderRadius.circular(20),
+                color: isDark ? AppColors.darkCardBackground : Colors.white,
+                borderRadius: BorderRadius.circular(16),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.1),
-                    blurRadius: 8,
-                    offset: Offset(0, 2),
+                    color: Colors.black.withValues(alpha: 0.05),
+                    blurRadius: 10,
+                    offset: const Offset(0, 2),
                   ),
                 ],
               ),
               child: Center(
                 child: CircularProgressIndicator(
-                  valueColor: AlwaysStoppedAnimation<Color>(AppColors.primary),
+                  valueColor:
+                      const AlwaysStoppedAnimation<Color>(AppColors.primary),
                 ),
               ),
             ),
@@ -493,101 +530,147 @@ class HomeScreenState extends State<HomeScreen>
     );
   }
 
-  Widget _buildErrorState() {
+  Widget _buildErrorState(bool isDark) {
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(
-            Icons.error_outline,
-            size: 80,
-            color: AppColors.warning.withValues(alpha: 0.8),
-          ),
-          const SizedBox(height: 16),
-          Text(
-            'Oops! Something went wrong',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight: FontWeight.bold,
-              color: AppColors.textPrimary,
-            ),
-          ),
-          const SizedBox(height: 8),
-          Text(
-            _errorMessage ?? 'Failed to load schedules',
-            style: TextStyle(
-              fontSize: 16,
-              color: AppColors.textSecondary,
-            ),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 24),
-          ElevatedButton.icon(
-            onPressed: _fetchSchedules,
-            icon: const Icon(Icons.refresh),
-            label: const Text('Retry'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppColors.primary,
-              foregroundColor: AppColors.textOnPrimary,
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12),
+      child: Padding(
+        padding: const EdgeInsets.all(32.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: AppColors.error.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                Icons.error_outline,
+                size: 64,
+                color: AppColors.error,
               ),
             ),
-          ),
-        ],
+            const SizedBox(height: 24),
+            Text(
+              'Oops! Something went wrong',
+              style: TextStyle(
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+                color: isDark
+                    ? AppColors.darkTextPrimary
+                    : AppColors.lightTextPrimary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              _errorMessage ?? 'Failed to load schedules',
+              style: TextStyle(
+                fontSize: 15,
+                color: isDark
+                    ? AppColors.darkTextSecondary
+                    : AppColors.lightTextSecondary,
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 32),
+            ElevatedButton.icon(
+              onPressed: _fetchSchedules,
+              icon: const Icon(Icons.refresh),
+              label: const Text('Try Again'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                foregroundColor: Colors.white,
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 2,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildScheduleList(bool isLargeScreen) {
+  Widget _buildScheduleList(bool isLargeScreen, bool isDark) {
     final fullySetSchedules = _schedules.where((s) => s.isFullySet).toList();
     final draftSchedules = _schedules.where((s) => !s.isFullySet).toList();
 
-    return ListView(
-      padding: EdgeInsets.symmetric(
-        horizontal: isLargeScreen ? 24.0 : 16.0,
-        vertical: 16.0,
+    return FadeTransition(
+      opacity: _fadeAnimation,
+      child: ListView(
+        padding: EdgeInsets.symmetric(
+          horizontal: isLargeScreen ? 24.0 : 16.0,
+          vertical: 16.0,
+        ),
+        children: [
+          if (draftSchedules.isNotEmpty) ...[
+            _buildSectionHeader(
+                'Drafts', draftSchedules.length, isDark, Icons.drafts),
+            const SizedBox(height: 12),
+            ...draftSchedules.map((schedule) =>
+                _buildScheduleCard(schedule, isLargeScreen, isDark)),
+            const SizedBox(height: 24),
+          ],
+          if (fullySetSchedules.isNotEmpty) ...[
+            _buildSectionHeader('Active Schedules', fullySetSchedules.length,
+                isDark, Icons.check_circle),
+            const SizedBox(height: 12),
+            ...fullySetSchedules.map((schedule) =>
+                _buildScheduleCard(schedule, isLargeScreen, isDark)),
+          ],
+        ],
       ),
-      children: [
-        if (draftSchedules.isNotEmpty) ...[
-          Padding(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-            child: Text(
-              'Drafts',
-              style: TextStyle(
-                fontSize: isLargeScreen ? 20 : 18,
-                fontWeight: FontWeight.w700,
-                color: AppColors.textPrimary,
-              ),
-            ),
-          ),
-          ...draftSchedules
-              .map((schedule) => _buildScheduleCard(schedule, isLargeScreen)),
-          const SizedBox(height: 16),
-        ],
-        if (fullySetSchedules.isNotEmpty) ...[
-          Padding(
-            padding:
-                const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
-            child: Text(
-              'Complete Schedules',
-              style: TextStyle(
-                fontSize: isLargeScreen ? 20 : 18,
-                fontWeight: FontWeight.w700,
-                color: AppColors.textPrimary,
-              ),
-            ),
-          ),
-          ...fullySetSchedules
-              .map((schedule) => _buildScheduleCard(schedule, isLargeScreen)),
-        ],
-      ],
     );
   }
 
-  Widget _buildScheduleCard(Schedule schedule, bool isLargeScreen) {
+  Widget _buildSectionHeader(
+      String title, int count, bool isDark, IconData icon) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+      decoration: BoxDecoration(
+        color: isDark
+            ? AppColors.darkSurface
+            : AppColors.primary.withValues(alpha: 0.05),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Row(
+        children: [
+          Icon(icon, color: AppColors.primary, size: 20),
+          const SizedBox(width: 8),
+          Text(
+            title,
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+              color: isDark ? AppColors.darkTextPrimary : AppColors.primary,
+            ),
+          ),
+          const Spacer(),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+            decoration: BoxDecoration(
+              color: AppColors.primary,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Text(
+              count.toString(),
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+                fontSize: 13,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildScheduleCard(
+      Schedule schedule, bool isLargeScreen, bool isDark) {
     final isOwner = schedule.ownerId == _currentUserId;
     final Color statusColor =
         schedule.isFullySet ? AppColors.success : AppColors.warning;
@@ -597,21 +680,32 @@ class HomeScreenState extends State<HomeScreen>
       direction: isOwner ? DismissDirection.horizontal : DismissDirection.none,
       confirmDismiss: (direction) async {
         if (direction == DismissDirection.endToStart) {
-          final shouldDelete = await showDialog(
+          final shouldDelete = await showDialog<bool>(
             context: context,
             builder: (context) => AlertDialog(
-              title: const Text('Delete Schedule'),
-              content:
-                  Text('Are you sure you want to delete "${schedule.name}"?'),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(16)),
+              title: Row(
+                children: [
+                  Icon(Icons.warning_amber_rounded, color: AppColors.error),
+                  const SizedBox(width: 12),
+                  const Text('Delete Schedule'),
+                ],
+              ),
+              content: Text(
+                  'Are you sure you want to delete "${schedule.name}"? This action cannot be undone.'),
               actions: [
                 TextButton(
                   onPressed: () => Navigator.of(context).pop(false),
                   child: const Text('Cancel'),
                 ),
-                TextButton(
+                ElevatedButton(
                   onPressed: () => Navigator.of(context).pop(true),
-                  child: const Text('Delete',
-                      style: TextStyle(color: AppColors.error)),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.error,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('Delete'),
                 ),
               ],
             ),
@@ -628,218 +722,281 @@ class HomeScreenState extends State<HomeScreen>
         return false;
       },
       background: Container(
+        margin: const EdgeInsets.symmetric(vertical: 6),
         decoration: BoxDecoration(
-          color: AppColors.primary.withValues(alpha: 0.1),
+          gradient: LinearGradient(
+            colors: [
+              AppColors.primary.withValues(alpha: 0.2),
+              AppColors.primary.withValues(alpha: 0.05)
+            ],
+          ),
           borderRadius: BorderRadius.circular(16),
         ),
         alignment: Alignment.centerLeft,
-        padding: const EdgeInsets.only(left: 20),
-        child: const Icon(Icons.edit, color: AppColors.primary),
+        padding: const EdgeInsets.only(left: 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.edit, color: AppColors.primary, size: 28),
+            const SizedBox(height: 4),
+            Text(
+              'Edit',
+              style: TextStyle(
+                color: AppColors.primary,
+                fontWeight: FontWeight.w600,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
       ),
       secondaryBackground: Container(
+        margin: const EdgeInsets.symmetric(vertical: 6),
         decoration: BoxDecoration(
-          color: AppColors.error.withValues(alpha: 0.1),
+          gradient: LinearGradient(
+            colors: [
+              AppColors.error.withValues(alpha: 0.05),
+              AppColors.error.withValues(alpha: 0.2)
+            ],
+          ),
           borderRadius: BorderRadius.circular(16),
         ),
         alignment: Alignment.centerRight,
-        padding: const EdgeInsets.only(right: 20),
-        child: const Icon(Icons.delete, color: AppColors.error),
+        padding: const EdgeInsets.only(right: 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.delete, color: AppColors.error, size: 28),
+            const SizedBox(height: 4),
+            Text(
+              'Delete',
+              style: TextStyle(
+                color: AppColors.error,
+                fontWeight: FontWeight.w600,
+                fontSize: 12,
+              ),
+            ),
+          ],
+        ),
       ),
       child: AnimatedBuilder(
         animation: _fadeAnimation,
         builder: (context, child) {
           return Transform.scale(
-            scale: 0.95 + (_fadeAnimation.value * 0.05),
+            scale: 0.96 + (_fadeAnimation.value * 0.04),
             child: Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+              padding: const EdgeInsets.symmetric(vertical: 6.0),
               child: Card(
-                elevation: 3,
-                shadowColor: Colors.black.withValues(alpha: 0.15),
+                elevation: 4,
+                shadowColor: Colors.black.withValues(alpha: 0.1),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(16),
                 ),
-                clipBehavior: Clip.antiAlias,
-                child: Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                      colors: [
-                        AppColors.background.withValues(alpha: 0.95),
-                        AppColors.background.withValues(alpha: 0.85),
-                      ],
-                    ),
-                    borderRadius: BorderRadius.circular(16),
-                  ),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(16),
-                    splashColor: AppColors.primary.withValues(alpha: 0.2),
-                    highlightColor: AppColors.primary.withValues(alpha: 0.1),
-                    onTap: () => _authenticateAndNavigate(schedule.id),
+                color: isDark ? AppColors.darkCardBackground : Colors.white,
+                child: InkWell(
+                  borderRadius: BorderRadius.circular(16),
+                  onTap: () => _authenticateAndNavigate(schedule.id),
+                  child: Padding(
+                    padding: const EdgeInsets.all(16.0),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
-                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.center,
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(6.0),
-                                decoration: BoxDecoration(
-                                  color:
-                                      AppColors.primary.withValues(alpha: 0.1),
-                                  borderRadius: BorderRadius.circular(10),
-                                ),
-                                child: Icon(
-                                  Icons.schedule,
-                                  color: AppColors.primary,
-                                  size: isLargeScreen ? 18 : 16,
-                                ),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Row(
-                                  children: [
-                                    Expanded(
-                                      child: Text(
-                                        schedule.name,
-                                        style: TextStyle(
-                                          fontSize: isLargeScreen ? 16 : 15,
-                                          fontWeight: FontWeight.w700,
-                                          color: AppColors.textPrimary,
-                                        ),
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        semanticsLabel: schedule.name,
-                                      ),
-                                    ),
-                                    Row(
-                                      children: [
-                                        Container(
-                                          padding: const EdgeInsets.symmetric(
-                                            horizontal: 6,
-                                            vertical: 2,
-                                          ),
-                                          decoration: BoxDecoration(
-                                            color: statusColor.withValues(
-                                                alpha: 0.2),
-                                            borderRadius:
-                                                BorderRadius.circular(8),
-                                            border: Border.all(
-                                              color: statusColor.withValues(
-                                                  alpha: 0.5),
-                                              width: 1,
-                                            ),
-                                          ),
-                                          child: Text(
-                                            schedule.isFullySet
-                                                ? 'Fully Set'
-                                                : 'Draft',
-                                            style: TextStyle(
-                                              color: statusColor,
-                                              fontSize: isLargeScreen ? 11 : 10,
-                                              fontWeight: FontWeight.w600,
-                                            ),
-                                          ),
-                                        ),
-                                        const SizedBox(width: 4),
-                                        if (isOwner)
-                                          Container(
-                                            padding: const EdgeInsets.symmetric(
-                                              horizontal: 6,
-                                              vertical: 2,
-                                            ),
-                                            decoration: BoxDecoration(
-                                              color: AppColors.primary
-                                                  .withValues(alpha: 0.2),
-                                              borderRadius:
-                                                  BorderRadius.circular(8),
-                                            ),
-                                            child: Text(
-                                              'Owner',
-                                              style: TextStyle(
-                                                fontSize: 10,
-                                                fontWeight: FontWeight.w600,
-                                                color: AppColors.primary,
-                                              ),
-                                            ),
-                                          ),
-                                      ],
-                                    ),
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.all(10),
+                              decoration: BoxDecoration(
+                                gradient: LinearGradient(
+                                  colors: [
+                                    AppColors.primary,
+                                    AppColors.secondary
                                   ],
                                 ),
+                                borderRadius: BorderRadius.circular(12),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: AppColors.primary
+                                        .withValues(alpha: 0.3),
+                                    blurRadius: 8,
+                                    offset: const Offset(0, 2),
+                                  ),
+                                ],
                               ),
-                            ],
-                          ),
+                              child: const Icon(Icons.schedule,
+                                  color: Colors.white, size: 20),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    schedule.name,
+                                    style: TextStyle(
+                                      fontSize: isLargeScreen ? 18 : 16,
+                                      fontWeight: FontWeight.w700,
+                                      color: isDark
+                                          ? AppColors.darkTextPrimary
+                                          : AppColors.lightTextPrimary,
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 8, vertical: 4),
+                                        decoration: BoxDecoration(
+                                          color: statusColor.withValues(
+                                              alpha: 0.15),
+                                          borderRadius:
+                                              BorderRadius.circular(6),
+                                          border: Border.all(
+                                              color: statusColor.withValues(
+                                                  alpha: 0.5)),
+                                        ),
+                                        child: Text(
+                                          schedule.isFullySet
+                                              ? 'Active'
+                                              : 'Draft',
+                                          style: TextStyle(
+                                            color: statusColor,
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w700,
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      if (isOwner)
+                                        Container(
+                                          padding: const EdgeInsets.symmetric(
+                                              horizontal: 8, vertical: 4),
+                                          decoration: BoxDecoration(
+                                            color: AppColors.primary
+                                                .withValues(alpha: 0.15),
+                                            borderRadius:
+                                                BorderRadius.circular(6),
+                                          ),
+                                          child: Row(
+                                            mainAxisSize: MainAxisSize.min,
+                                            children: [
+                                              Icon(Icons.star,
+                                                  size: 12,
+                                                  color: AppColors.primary),
+                                              const SizedBox(width: 4),
+                                              Text(
+                                                'Owner',
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  fontWeight: FontWeight.w700,
+                                                  color: AppColors.primary,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
                         if (schedule.description != null &&
-                            schedule.description!.isNotEmpty)
+                            schedule.description!.isNotEmpty) ...[
+                          const SizedBox(height: 12),
                           ExpandableDescription(
                             description: schedule.description!,
                             isLargeScreen: isLargeScreen,
                           ),
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(12, 0, 12, 10),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Text(
-                                'Created: ${DateFormat('dd-MM-yy').format(schedule.createdAt)}',
-                                style: TextStyle(
-                                  fontSize: isLargeScreen ? 11 : 10,
-                                  color: AppColors.textSecondary,
+                        ],
+                        const SizedBox(height: 12),
+                        Divider(
+                            color: isDark
+                                ? AppColors.darkDivider
+                                : AppColors.lightDivider),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Icon(
+                              Icons.calendar_today,
+                              size: 14,
+                              color: isDark
+                                  ? AppColors.darkTextSecondary
+                                  : AppColors.lightTextSecondary,
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              'Created: ${DateFormat('MMM dd, yyyy').format(schedule.createdAt)}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: isDark
+                                    ? AppColors.darkTextSecondary
+                                    : AppColors.lightTextSecondary,
+                              ),
+                            ),
+                            const Spacer(),
+                            Icon(
+                              Icons.people,
+                              size: 14,
+                              color: isDark
+                                  ? AppColors.darkTextSecondary
+                                  : AppColors.lightTextSecondary,
+                            ),
+                            const SizedBox(width: 4),
+                            Text(
+                              '${schedule.participants.length}',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: isDark
+                                    ? AppColors.darkTextSecondary
+                                    : AppColors.lightTextSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 12),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            if (isOwner)
+                              TextButton.icon(
+                                onPressed: () =>
+                                    _navigateToCreateSchedule(schedule),
+                                icon: const Icon(Icons.edit, size: 16),
+                                label: const Text('Edit'),
+                                style: TextButton.styleFrom(
+                                  foregroundColor: AppColors.primary,
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 12, vertical: 8),
                                 ),
                               ),
-                              Row(
-                                children: [
-                                  if (isOwner)
-                                    TextButton.icon(
-                                      onPressed: () =>
-                                          _navigateToCreateSchedule(schedule),
-                                      icon: const Icon(Icons.edit, size: 14),
-                                      label: const Text(
-                                        'Edit',
-                                        style: TextStyle(fontSize: 12),
-                                      ),
-                                      style: TextButton.styleFrom(
-                                        foregroundColor: AppColors.primary,
-                                        padding: const EdgeInsets.symmetric(
-                                          horizontal: 8,
-                                          vertical: 4,
-                                        ),
-                                        minimumSize: const Size(0, 28),
-                                      ),
-                                    ),
-                                  const SizedBox(width: 4),
-                                  ElevatedButton.icon(
-                                    onPressed: () =>
-                                        _authenticateAndNavigate(schedule.id),
-                                    icon:
-                                        const Icon(Icons.fingerprint, size: 14),
-                                    label: const Text(
-                                      'View',
-                                      style: TextStyle(fontSize: 12),
-                                    ),
-                                    style: ElevatedButton.styleFrom(
-                                      backgroundColor: AppColors.secondary,
-                                      foregroundColor: AppColors.textOnPrimary,
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 12,
-                                        vertical: 4,
-                                      ),
-                                      minimumSize: const Size(0, 28),
-                                      shape: RoundedRectangleBorder(
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                    ),
-                                  ),
-                                ],
+                            const SizedBox(width: 8),
+                            ElevatedButton.icon(
+                              onPressed: () =>
+                                  _authenticateAndNavigate(schedule.id),
+                              icon: Icon(
+                                _canUseBiometrics
+                                    ? Icons.fingerprint
+                                    : Icons.lock_open,
+                                size: 16,
                               ),
-                            ],
-                          ),
+                              label: const Text('View Details'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: AppColors.primary,
+                                foregroundColor: Colors.white,
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16, vertical: 10),
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(10),
+                                ),
+                                elevation: 2,
+                              ),
+                            ),
+                          ],
                         ),
                       ],
                     ),
@@ -853,9 +1010,10 @@ class HomeScreenState extends State<HomeScreen>
     );
   }
 
-  Widget _buildEmptyState() {
+  Widget _buildEmptyState(bool isDark) {
     return RefreshIndicator(
       onRefresh: _fetchSchedules,
+      color: AppColors.primary,
       child: ListView(
         physics: const AlwaysScrollableScrollPhysics(),
         children: [
@@ -866,43 +1024,64 @@ class HomeScreenState extends State<HomeScreen>
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   TweenAnimationBuilder(
-                    tween: Tween<double>(begin: 0.95, end: 1.0),
+                    tween: Tween<double>(begin: 0.0, end: 1.0),
                     duration: const Duration(milliseconds: 1200),
                     curve: Curves.elasticOut,
-                    builder: (context, scale, child) {
+                    builder: (context, double value, child) {
                       return Transform.scale(
-                        scale: scale,
-                        child: child,
+                        scale: value,
+                        child: Container(
+                          padding: const EdgeInsets.all(32),
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            gradient: LinearGradient(
+                              colors: [
+                                AppColors.primary.withValues(alpha: 0.2),
+                                AppColors.secondary.withValues(alpha: 0.1),
+                              ],
+                            ),
+                          ),
+                          child: Image.asset(
+                            'assets/schedulo.png',
+                            width: 100,
+                            height: 100,
+                          ),
+                        ),
                       );
                     },
-                    child: Image.asset(
-                      'assets/schedulo_logo.png',
-                      width: 120,
-                      height: 120,
-                      opacity: const AlwaysStoppedAnimation(0.8),
-                    ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: 32),
                   Text(
                     'No schedules yet!',
                     style: TextStyle(
-                      fontSize: 22,
+                      fontSize: 24,
                       fontWeight: FontWeight.bold,
-                      color: AppColors.secondary,
+                      color: isDark
+                          ? AppColors.darkTextPrimary
+                          : AppColors.primary,
                     ),
                   ),
                   const SizedBox(height: 16),
                   Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 32),
+                    padding: const EdgeInsets.symmetric(horizontal: 48),
                     child: Text(
-                      'Create your first schedule to get started or refresh screen if already done',
+                      'Create your first schedule to get started.\nTap the button below or pull down to refresh.',
                       style: TextStyle(
-                        fontSize: 16,
-                        color: AppColors.textOnPrimary.withValues(alpha: 0.7),
+                        fontSize: 15,
+                        color: isDark
+                            ? AppColors.darkTextSecondary
+                            : AppColors.lightTextSecondary,
+                        height: 1.5,
                       ),
                       textAlign: TextAlign.center,
                     ),
-                  )
+                  ),
+                  const SizedBox(height: 32),
+                  Icon(
+                    Icons.arrow_downward,
+                    color: AppColors.primary.withValues(alpha: 0.5),
+                    size: 32,
+                  ),
                 ],
               ),
             ),

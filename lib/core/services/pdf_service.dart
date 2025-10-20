@@ -41,7 +41,7 @@ class PdfService {
   /// Load app logo
   Future<Uint8List> _getAppLogo() async {
     _logoData ??= await rootBundle
-        .load('assets/schedulo_logo.png')
+        .load('assets/schedulo.png')
         .then((data) => data.buffer.asUint8List());
     return _logoData!;
   }

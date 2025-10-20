@@ -284,7 +284,7 @@ class LoginScreenState extends State<LoginScreen>
                                       child: ClipRRect(
                                         borderRadius: BorderRadius.circular(60),
                                         child: Image.asset(
-                                          'assets/schedulo_logo.png',
+                                          'assets/schedulo.png',
                                           fit: BoxFit.contain,
                                           errorBuilder:
                                               (context, error, stackTrace) {

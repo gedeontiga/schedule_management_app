@@ -1,12 +1,18 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:provider/provider.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:timezone/data/latest.dart' as tz;
+import 'package:firebase_core/firebase_core.dart';
 import 'dart:io';
-import 'core/utils/firebase_manager.dart';
+
+import 'firebase_options.dart';
+
+import 'core/theme/theme_provider.dart';
+import 'core/settings/app_theme.dart';
 import 'core/services/offline_sync_service.dart';
 import 'screens/auth_wrapper.dart';
 import 'screens/login_screen.dart';
@@ -18,61 +24,107 @@ import 'screens/schedule_management_screen.dart';
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
 
-void main() async {
+void main() {
   WidgetsFlutterBinding.ensureInitialized();
+  runApp(const AppInitializer());
+}
 
-  // Initialize timezone data for notifications
-  tz.initializeTimeZones();
+class AppInitializer extends StatefulWidget {
+  const AppInitializer({super.key});
 
-  // Initialize local notifications
-  const androidSettings = AndroidInitializationSettings('schedulo_logo');
-  const iosSettings = DarwinInitializationSettings();
-  const linuxSettings = LinuxInitializationSettings(
-    defaultActionName: 'Open notification',
-  );
-  const initializationSettings = InitializationSettings(
-    android: androidSettings,
-    iOS: iosSettings,
-    macOS: iosSettings,
-    linux: linuxSettings,
-  );
-  await flutterLocalNotificationsPlugin.initialize(initializationSettings);
+  @override
+  State<AppInitializer> createState() => _AppInitializerState();
+}
 
-  // Initialize sqflite for desktop platforms
-  if (Platform.isLinux || Platform.isMacOS || Platform.isWindows) {
-    sqfliteFfiInit();
-    databaseFactory = databaseFactoryFfi;
+class _AppInitializerState extends State<AppInitializer> {
+  late final Future<void> _initializationFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _initializationFuture = _initializeApp();
   }
 
-  // Initialize Hive for offline operations
-  await Hive.initFlutter();
-  await Hive.openBox('offline_operations');
-  await Hive.openBox('offline_cache');
-  await Hive.openBox('alarms');
+  Future<void> _initializeApp() async {
+    try {
+      await Firebase.initializeApp(
+        options: DefaultFirebaseOptions.currentPlatform,
+      );
 
-  // Check connectivity
-  final connectivityResult = await Connectivity().checkConnectivity();
-  final isOffline = connectivityResult.contains(ConnectivityResult.none);
+      tz.initializeTimeZones();
+      const androidSettings =
+          AndroidInitializationSettings('@mipmap/ic_launcher');
+      const iosSettings = DarwinInitializationSettings();
+      const linuxSettings =
+          LinuxInitializationSettings(defaultActionName: 'Open notification');
+      const initializationSettings = InitializationSettings(
+          android: androidSettings,
+          iOS: iosSettings,
+          macOS: iosSettings,
+          linux: linuxSettings);
+      await flutterLocalNotificationsPlugin.initialize(initializationSettings);
 
-  try {
-    if (!isOffline) {
-      // Initialize Firebase when online
-      await FirebaseManager.initialize();
-    } else {}
+      if (!kIsWeb &&
+          (Platform.isLinux || Platform.isMacOS || Platform.isWindows)) {
+        sqfliteFfiInit();
+        databaseFactory = databaseFactoryFfi;
+      }
 
-    // Initialize offline sync service
-    final offlineSync = OfflineSyncService();
-    await offlineSync.initialize();
+      await Hive.initFlutter();
+      await Hive.openBox('offline_operations');
+      await Hive.openBox('offline_cache');
+      await Hive.openBox('alarms');
 
-    // Start auto-sync when connection is restored
-    if (!isOffline) {
-      await offlineSync.syncPendingOperations();
+      final offlineSync = OfflineSyncService();
+      await offlineSync.initialize();
+      final connectivityResult = await Connectivity().checkConnectivity();
+      if (!connectivityResult.contains(ConnectivityResult.none)) {
+        await offlineSync.syncPendingOperations();
+      }
+    } catch (e) {
+      debugPrint("Error during app initialization: $e");
+      rethrow;
     }
-  } catch (e) {
-    // Fallback to offline queue
   }
 
-  runApp(const MyApp());
+  @override
+  Widget build(BuildContext context) {
+    return FutureBuilder(
+      future: _initializationFuture,
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return MaterialApp(
+            home: Scaffold(
+              body: Center(
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Text(
+                    'Failed to initialize the app:\n\n${snapshot.error}',
+                    textAlign: TextAlign.center,
+                  ),
+                ),
+              ),
+            ),
+          );
+        }
+
+        if (snapshot.connectionState == ConnectionState.done) {
+          return ChangeNotifierProvider(
+            create: (_) => ThemeProvider(),
+            child: const MyApp(),
+          );
+        }
+
+        return const MaterialApp(
+          home: Scaffold(
+            body: Center(
+              child: CircularProgressIndicator(),
+            ),
+          ),
+        );
+      },
+    );
+  }
 }
 
 class MyApp extends StatelessWidget {
@@ -80,49 +132,13 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final themeProvider = context.watch<ThemeProvider>();
     return MaterialApp(
       title: 'Schedulo',
       debugShowCheckedModeBanner: false,
-      theme: ThemeData(
-        textTheme: GoogleFonts.oswaldTextTheme(
-          Theme.of(context).textTheme,
-        ),
-        primaryTextTheme: GoogleFonts.oswaldTextTheme(
-          Theme.of(context).primaryTextTheme,
-        ),
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: const Color(0xFF4A90E2),
-          brightness: Brightness.light,
-        ),
-        useMaterial3: true,
-        appBarTheme: AppBarTheme(
-          centerTitle: true,
-          elevation: 0,
-          backgroundColor: const Color(0xFF4A90E2),
-          foregroundColor: Colors.white,
-          titleTextStyle: GoogleFonts.oswald(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-            color: Colors.white,
-          ),
-        ),
-        elevatedButtonTheme: ElevatedButtonThemeData(
-          style: ElevatedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(12),
-            ),
-          ),
-        ),
-        inputDecorationTheme: InputDecorationTheme(
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-          filled: true,
-          fillColor: Colors.grey[50],
-        ),
-      ),
-      // Use AuthWrapper as initial screen
+      theme: AppTheme.lightTheme(context),
+      darkTheme: AppTheme.darkTheme(context),
+      themeMode: themeProvider.isDarkMode ? ThemeMode.dark : ThemeMode.light,
       home: const AuthWrapper(),
       routes: {
         '/login': (context) => const LoginScreen(),
