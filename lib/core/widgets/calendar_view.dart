@@ -49,17 +49,33 @@ class _CalendarViewState extends State<CalendarView>
   void _initializeFocusedDay() {
     final startDate = widget.schedule.startDate;
     final endDate = _getEndDate();
-    _focusedDay =
-        DateTime.now().isAfter(startDate) && DateTime.now().isBefore(endDate)
-            ? DateTime.now()
-            : startDate;
+    final now = DateTime.now();
+
+    // Focus on current date if it's within schedule range
+    if (now.isAfter(startDate) && now.isBefore(endDate)) {
+      _focusedDay = now;
+    } else if (now.isBefore(startDate)) {
+      // If schedule hasn't started, focus on start date
+      _focusedDay = startDate;
+    } else {
+      // If schedule has ended, focus on end date
+      _focusedDay = endDate;
+    }
   }
 
   @override
   void didUpdateWidget(CalendarView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.schedule != widget.schedule) {
+
+    // Only reset focus if schedule changed, not on free days update
+    if (oldWidget.schedule.id != widget.schedule.id ||
+        oldWidget.schedule.startDate != widget.schedule.startDate ||
+        oldWidget.schedule.duration != widget.schedule.duration) {
       _initializeFocusedDay();
+    }
+    // Keep current focus when only free days are updated
+    else if (oldWidget.freeDays.length != widget.freeDays.length) {
+      // Don't change _focusedDay - keep current view
     }
   }
 
@@ -72,11 +88,23 @@ class _CalendarViewState extends State<CalendarView>
       case '2 weeks':
         weeks = 2;
         break;
+      case '3 weeks':
+        weeks = 3;
+        break;
       case '1 month':
-        weeks = 5;
+        weeks = 4;
+        break;
+      case '2 months':
+        weeks = 8;
+        break;
+      case '3 months':
+        weeks = 12;
+        break;
+      case '6 months':
+        weeks = 26;
         break;
       default:
-        weeks = int.parse(widget.schedule.duration.split(' ')[0]);
+        weeks = int.tryParse(widget.schedule.duration.split(' ')[0]) ?? 1;
     }
     return widget.schedule.startDate.add(Duration(days: weeks * 7));
   }

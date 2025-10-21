@@ -38,10 +38,10 @@ class MainActivity : FlutterFragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         // Set FLAG_SECURE only once
-        window.setFlags(
-            android.view.WindowManager.LayoutParams.FLAG_SECURE,
-            android.view.WindowManager.LayoutParams.FLAG_SECURE
-        )
+        // window.setFlags(
+        //     android.view.WindowManager.LayoutParams.FLAG_SECURE,
+        //     android.view.WindowManager.LayoutParams.FLAG_SECURE
+        // )
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: android.content.Intent?) {

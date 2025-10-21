@@ -4,6 +4,7 @@ import 'package:intl/intl.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import '../../models/schedule.dart';
 import '../../models/free_day.dart';
 import '../utils/firebase_manager.dart';
@@ -13,7 +14,6 @@ class PdfService {
   Uint8List? _oswaldBoldData;
   Uint8List? _logoData;
 
-  // Enhanced color palette with softer, more friendly colors
   static final PdfColor primaryBlue = PdfColor.fromHex('#5B9BD5');
   static final PdfColor accentOrange = PdfColor.fromHex('#FFA940');
   static final PdfColor accentRed = PdfColor.fromHex('#FF6B6B');
@@ -45,81 +45,73 @@ class PdfService {
     return _logoData!;
   }
 
-  Future<Directory> _getDownloadDirectory() async {
-    if (Platform.isAndroid) {
-      final Directory? directory = await getExternalStorageDirectory();
-
-      if (directory == null) {
-        throw Exception('Unable to access external storage');
-      }
-
-      directory.path.replaceAll(
-          '/Android/data/${directory.path.split('/')[4]}/files', '/Download');
-
-      final appDir = Directory('${directory.path}/SchedulerPDFs');
-
-      if (!await appDir.exists()) {
-        await appDir.create(recursive: true);
-      }
-
-      return appDir;
-    } else if (Platform.isIOS) {
-      final dir = await getApplicationDocumentsDirectory();
-      final appDir = Directory('${dir.path}/SchedulerPDFs');
-      if (!await appDir.exists()) await appDir.create(recursive: true);
-      return appDir;
-    }
-
-    return await getTemporaryDirectory();
-  }
-
-  Future<File> generateSchedulePdf(Schedule schedule) async {
+  Future<String> generateSchedulePdf(Schedule schedule) async {
     if (!schedule.isFullySet) {
       throw Exception('Schedule must be fully set to export as PDF');
     }
 
-    await _loadFonts();
-    final logoImage = await _getAppLogo();
-    final downloadDir = await _getDownloadDirectory();
+    try {
+      await _loadFonts();
+      final logoImage = await _getAppLogo();
 
-    final sanitizedName = schedule.name
-        .replaceAll(' ', '_')
-        .replaceAll(RegExp(r'[^\w\s]+'), '')
-        .toLowerCase();
-    final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
-    final filePath = '${downloadDir.path}/${sanitizedName}_$timestamp.pdf';
+      final Directory cacheDir = await getTemporaryDirectory();
 
-    final participants = await _fetchParticipantsWithDetails(schedule.id);
+      final sanitizedName = schedule.name
+          .replaceAll(' ', '_')
+          .replaceAll(RegExp(r'[^\w\s]+'), '')
+          .toLowerCase();
+      final timestamp = DateFormat('yyyyMMdd_HHmmss').format(DateTime.now());
+      final fileName = 'schedule_${sanitizedName}_$timestamp.pdf';
+      final filePath = '${cacheDir.path}/$fileName';
 
-    final pdf = pw.Document(
-      theme: pw.ThemeData.withFont(
-        base: pw.Font.ttf(ByteData.sublistView(_oswaldRegularData!)),
-        bold: pw.Font.ttf(ByteData.sublistView(_oswaldBoldData!)),
-      ),
-    );
+      final participants = await _fetchParticipantsWithDetails(schedule.id);
 
-    pdf.addPage(
-      pw.MultiPage(
-        pageFormat: PdfPageFormat.a4,
-        margin: const pw.EdgeInsets.all(28),
-        header: (context) => _buildHeader(logoImage, schedule),
-        footer: (context) => _buildFooter(context),
-        build: (context) => [
-          _buildTitleSection(schedule),
-          pw.SizedBox(height: 24),
-          _buildScheduleDetails(schedule),
-          pw.SizedBox(height: 32),
-          _buildCalendarView(schedule, participants),
-          pw.SizedBox(height: 32),
-          _buildParticipantDetails(participants),
-        ],
-      ),
-    );
+      final pdf = pw.Document(
+        theme: pw.ThemeData.withFont(
+          base: pw.Font.ttf(ByteData.sublistView(_oswaldRegularData!)),
+          bold: pw.Font.ttf(ByteData.sublistView(_oswaldBoldData!)),
+        ),
+      );
 
-    final file = File(filePath);
-    await file.writeAsBytes(await pdf.save());
+      pdf.addPage(
+        pw.MultiPage(
+          pageFormat: PdfPageFormat.a4,
+          margin: const pw.EdgeInsets.all(28),
+          header: (context) => _buildHeader(logoImage, schedule),
+          footer: (context) => _buildFooter(context),
+          build: (context) => [
+            _buildTitleSection(schedule),
+            pw.SizedBox(height: 24),
+            _buildScheduleDetails(schedule),
+            pw.SizedBox(height: 32),
+            _buildCalendarView(schedule, participants),
+            pw.SizedBox(height: 32),
+            _buildParticipantDetails(participants),
+          ],
+        ),
+      );
 
-    return file;
+      final file = File(filePath);
+      await file.writeAsBytes(await pdf.save());
+
+      return filePath;
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  Future<ShareResult> sharePdf(String filePath, String scheduleName) async {
+    try {
+      final result = await SharePlus.instance.share(ShareParams(
+        files: [XFile(filePath)],
+        subject: 'Schedule: $scheduleName',
+        text: 'Here is the schedule PDF for $scheduleName',
+      ));
+
+      return result;
+    } catch (e) {
+      rethrow;
+    }
   }
 
   pw.Widget _buildHeader(Uint8List logoImage, Schedule schedule) {
@@ -162,7 +154,7 @@ class PdfService {
                   ),
                   pw.SizedBox(height: 2),
                   pw.Text(
-                    'Interpretation Planning System',
+                    'Easily Manage Shared Timetable',
                     style: pw.TextStyle(
                       fontSize: 10,
                       color: mediumGray,
@@ -419,187 +411,261 @@ class PdfService {
       }
     }
 
+    final startDate = schedule.startDate;
+    final endDate = _getScheduleEndDate(schedule);
+
+    final monthGroups = <DateTime, List<DateTime>>{};
+    DateTime currentDate = startDate;
+
+    while (currentDate.isBefore(endDate) ||
+        currentDate.isAtSameMomentAs(endDate)) {
+      final monthKey = DateTime(currentDate.year, currentDate.month, 1);
+      monthGroups.putIfAbsent(monthKey, () => []);
+      monthGroups[monthKey]!.add(currentDate);
+      currentDate = currentDate.add(const Duration(days: 1));
+    }
+
+    return pw.Column(
+      children: monthGroups.entries.map((entry) {
+        return pw.Padding(
+          padding: const pw.EdgeInsets.only(bottom: 20),
+          child: _buildMonthTable(
+              entry.key, entry.value, dayAssignments, schedule),
+        );
+      }).toList(),
+    );
+  }
+
+  DateTime _getScheduleEndDate(Schedule schedule) {
+    int weeks = 0;
+    switch (schedule.duration) {
+      case '1 week':
+        weeks = 1;
+        break;
+      case '2 weeks':
+        weeks = 2;
+        break;
+      case '3 weeks':
+        weeks = 3;
+        break;
+      case '1 month':
+        weeks = 4;
+        break;
+      case '2 months':
+        weeks = 8;
+        break;
+      case '3 months':
+        weeks = 12;
+        break;
+      case '6 months':
+        weeks = 26;
+        break;
+      default:
+        weeks = int.tryParse(schedule.duration.split(' ')[0]) ?? 1;
+    }
+    return schedule.startDate.add(Duration(days: weeks * 7));
+  }
+
+  pw.Widget _buildMonthTable(
+    DateTime month,
+    List<DateTime> datesInMonth,
+    Map<String, List<Map<String, dynamic>>> dayAssignments,
+    Schedule schedule,
+  ) {
     final rows = <pw.TableRow>[];
 
     rows.add(
       pw.TableRow(
         decoration: pw.BoxDecoration(
           gradient: pw.LinearGradient(
-            colors: [headerGray, PdfColor.fromHex('#5A6C7D')],
+            colors: [primaryBlue, PdfColor.fromHex('#4A7BA7')],
           ),
         ),
         children: [
-          'Monday',
-          'Tuesday',
-          'Wednesday',
-          'Thursday',
-          'Friday',
-          'Saturday',
-          'Sunday'
-        ]
-            .map((day) => pw.Container(
-                  padding: const pw.EdgeInsets.symmetric(vertical: 12),
-                  alignment: pw.Alignment.center,
-                  child: pw.Text(
-                    day,
-                    style: pw.TextStyle(
-                      fontSize: 10,
-                      fontWeight: pw.FontWeight.bold,
-                      color: PdfColors.white,
-                      letterSpacing: 0.3,
-                    ),
-                  ),
-                ))
-            .toList(),
+          pw.Container(
+            padding: const pw.EdgeInsets.symmetric(vertical: 10),
+            alignment: pw.Alignment.center,
+            child: pw.Text(
+              DateFormat('MMMM yyyy').format(month),
+              style: pw.TextStyle(
+                fontSize: 14,
+                fontWeight: pw.FontWeight.bold,
+                color: PdfColors.white,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ),
+        ],
       ),
     );
 
-    final startDate = schedule.startDate;
-    final firstDay = startDate.subtract(Duration(days: startDate.weekday - 1));
+    rows.add(
+      pw.TableRow(
+        decoration: pw.BoxDecoration(color: headerGray),
+        children: [
+          pw.Container(
+            padding: const pw.EdgeInsets.symmetric(vertical: 8),
+            child: pw.Row(
+              children: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+                  .map((day) => pw.Expanded(
+                        child: pw.Center(
+                          child: pw.Text(
+                            day,
+                            style: pw.TextStyle(
+                              fontSize: 8,
+                              fontWeight: pw.FontWeight.bold,
+                              color: PdfColors.white,
+                            ),
+                          ),
+                        ),
+                      ))
+                  .toList(),
+            ),
+          ),
+        ],
+      ),
+    );
 
-    DateTime currentDate = firstDay;
-    while (currentDate.isBefore(startDate.add(const Duration(days: 35)))) {
+    final firstDayOfMonth = DateTime(month.year, month.month, 1);
+    final lastDayOfMonth = DateTime(month.year, month.month + 1, 0);
+    final startingWeekday = firstDayOfMonth.weekday;
+
+    DateTime weekStart =
+        firstDayOfMonth.subtract(Duration(days: startingWeekday - 1));
+
+    while (
+        weekStart.isBefore(lastDayOfMonth) || weekStart.month == month.month) {
       final weekCells = <pw.Widget>[];
 
       for (int i = 0; i < 7; i++) {
-        final dateKey = DateFormat('yyyy-MM-dd').format(currentDate);
-        final assignments = dayAssignments[dateKey] ?? [];
+        final currentDate = weekStart.add(Duration(days: i));
+        final isCurrentMonth = currentDate.month == month.month;
+        final isInSchedule = datesInMonth.any((d) =>
+            d.year == currentDate.year &&
+            d.month == currentDate.month &&
+            d.day == currentDate.day);
 
-        weekCells.add(_buildCalendarCell(currentDate, assignments, schedule));
-        currentDate = currentDate.add(const Duration(days: 1));
+        if (isCurrentMonth && isInSchedule) {
+          final dateKey = DateFormat('yyyy-MM-dd').format(currentDate);
+          final assignments = dayAssignments[dateKey] ?? [];
+          weekCells.add(_buildCompactCalendarCell(currentDate, assignments));
+        } else {
+          weekCells.add(pw.Container(
+            height: 45,
+            decoration: pw.BoxDecoration(
+              color: isCurrentMonth ? PdfColors.grey100 : PdfColors.grey50,
+            ),
+            child: pw.Center(
+              child: pw.Text(
+                isCurrentMonth ? '${currentDate.day}' : '',
+                style: pw.TextStyle(
+                  fontSize: 7,
+                  color: PdfColors.grey300,
+                ),
+              ),
+            ),
+          ));
+        }
       }
 
-      rows.add(pw.TableRow(children: weekCells));
+      rows.add(
+        pw.TableRow(
+          children: [
+            pw.Row(children: weekCells),
+          ],
+        ),
+      );
+
+      weekStart = weekStart.add(const Duration(days: 7));
     }
 
     return pw.Table(
       border: pw.TableBorder.all(color: calendarBorder, width: 0.5),
-      columnWidths: {
-        0: const pw.FlexColumnWidth(1),
-        1: const pw.FlexColumnWidth(1),
-        2: const pw.FlexColumnWidth(1),
-        3: const pw.FlexColumnWidth(1),
-        4: const pw.FlexColumnWidth(1),
-        5: const pw.FlexColumnWidth(1),
-        6: const pw.FlexColumnWidth(1),
-      },
       children: rows,
     );
   }
 
-  pw.Widget _buildCalendarCell(
+  pw.Widget _buildCompactCalendarCell(
     DateTime date,
     List<Map<String, dynamic>> assignments,
-    Schedule schedule,
   ) {
-    final isToday = date.day == DateTime.now().day &&
-        date.month == DateTime.now().month &&
-        date.year == DateTime.now().year;
-
-    final isBeforeStart = date.isBefore(schedule.startDate);
-    final isWeekend = date.weekday == 6 || date.weekday == 7;
-
-    return pw.Container(
-      height: 70,
-      padding: const pw.EdgeInsets.all(6),
-      decoration: pw.BoxDecoration(
-        color: isToday
-            ? PdfColor.fromHex('#E3F2FD')
-            : isBeforeStart
-                ? PdfColor.fromHex('#F7FAFC')
-                : isWeekend
-                    ? PdfColor.fromHex('#FAFAFA')
-                    : cardBackground,
-      ),
-      child: pw.Column(
-        crossAxisAlignment: pw.CrossAxisAlignment.start,
-        children: [
-          pw.Container(
-            padding: const pw.EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: pw.BoxDecoration(
-              color: isToday ? primaryBlue : null,
-              borderRadius: pw.BorderRadius.circular(4),
-            ),
-            child: pw.Text(
-              '${date.day}',
-              style: pw.TextStyle(
-                fontSize: 9,
-                fontWeight: isToday ? pw.FontWeight.bold : pw.FontWeight.normal,
-                color: isToday
-                    ? PdfColors.white
-                    : isBeforeStart
-                        ? mediumGray
-                        : darkGray,
+    return pw.Expanded(
+      child: pw.Container(
+        height: 45,
+        padding: const pw.EdgeInsets.all(3),
+        decoration: pw.BoxDecoration(
+          color: assignments.isNotEmpty ? lightBackground : cardBackground,
+        ),
+        child: pw.Column(
+          crossAxisAlignment: pw.CrossAxisAlignment.start,
+          children: [
+            pw.Container(
+              padding:
+                  const pw.EdgeInsets.symmetric(horizontal: 3, vertical: 1),
+              decoration: pw.BoxDecoration(
+                color: assignments.isNotEmpty ? primaryBlue : null,
+                borderRadius: pw.BorderRadius.circular(3),
+              ),
+              child: pw.Text(
+                '${date.day}',
+                style: pw.TextStyle(
+                  fontSize: 7,
+                  fontWeight: assignments.isNotEmpty
+                      ? pw.FontWeight.bold
+                      : pw.FontWeight.normal,
+                  color: assignments.isNotEmpty ? PdfColors.white : darkGray,
+                ),
               ),
             ),
-          ),
-          if (assignments.isNotEmpty)
-            pw.Expanded(
-              child: pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.stretch,
-                children: [
-                  pw.SizedBox(height: 4),
-                  ...assignments.take(2).map((assignment) {
-                    final freeDay = assignment['freeDay'] as FreeDay;
-                    return pw.Container(
-                      margin: const pw.EdgeInsets.only(bottom: 3),
-                      padding: const pw.EdgeInsets.symmetric(
-                        horizontal: 5,
-                        vertical: 3,
-                      ),
-                      decoration: pw.BoxDecoration(
-                        color: assignment['color'],
-                        borderRadius: pw.BorderRadius.circular(4),
-                      ),
-                      child: pw.Column(
-                        crossAxisAlignment: pw.CrossAxisAlignment.start,
-                        children: [
-                          pw.Text(
-                            assignment['username'].toString().split(' ')[0],
-                            style: pw.TextStyle(
-                              fontSize: 7,
-                              fontWeight: pw.FontWeight.bold,
-                              color: PdfColors.white,
-                            ),
-                            maxLines: 1,
-                            overflow: pw.TextOverflow.clip,
+            if (assignments.isNotEmpty)
+              pw.Expanded(
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.stretch,
+                  children: [
+                    pw.SizedBox(height: 2),
+                    ...assignments.take(2).map((assignment) {
+                      final freeDay = assignment['freeDay'] as FreeDay;
+                      return pw.Container(
+                        margin: const pw.EdgeInsets.only(bottom: 2),
+                        padding: const pw.EdgeInsets.all(2),
+                        decoration: pw.BoxDecoration(
+                          color: assignment['color'],
+                          borderRadius: pw.BorderRadius.circular(2),
+                        ),
+                        child: pw.Text(
+                          '${assignment['username'].toString().split(' ')[0].substring(0, 3)} ${freeDay.startTime.substring(0, 5)}',
+                          style: pw.TextStyle(
+                            fontSize: 5,
+                            fontWeight: pw.FontWeight.bold,
+                            color: PdfColors.white,
                           ),
-                          pw.Text(
-                            '${freeDay.startTime}-${freeDay.endTime}',
-                            style: pw.TextStyle(
-                              fontSize: 6,
-                              color: PdfColors.grey100,
-                            ),
-                            maxLines: 1,
-                          ),
-                        ],
-                      ),
-                    );
-                  }),
-                  if (assignments.length > 2)
-                    pw.Container(
-                      padding: const pw.EdgeInsets.symmetric(
-                        horizontal: 4,
-                        vertical: 2,
-                      ),
-                      decoration: pw.BoxDecoration(
-                        color: lightBackground,
-                        borderRadius: pw.BorderRadius.circular(3),
-                        border: pw.Border.all(color: calendarBorder),
-                      ),
-                      child: pw.Text(
-                        '+${assignments.length - 2} more',
-                        style: pw.TextStyle(
-                          fontSize: 6,
+                          maxLines: 1,
+                          overflow: pw.TextOverflow.clip,
+                        ),
+                      );
+                    }),
+                    if (assignments.length > 2)
+                      pw.Container(
+                        padding: const pw.EdgeInsets.all(1),
+                        decoration: pw.BoxDecoration(
                           color: mediumGray,
-                          fontWeight: pw.FontWeight.bold,
+                          borderRadius: pw.BorderRadius.circular(2),
+                        ),
+                        child: pw.Text(
+                          '+${assignments.length - 2}',
+                          style: pw.TextStyle(
+                            fontSize: 5,
+                            color: PdfColors.white,
+                            fontWeight: pw.FontWeight.bold,
+                          ),
+                          textAlign: pw.TextAlign.center,
                         ),
                       ),
-                    ),
-                ],
+                  ],
+                ),
               ),
-            ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -803,14 +869,14 @@ class PdfService {
 
   PdfColor _getParticipantColor(String username) {
     final colors = [
-      PdfColor.fromHex('#5B9BD5'), // Blue
-      PdfColor.fromHex('#FFA940'), // Orange
-      PdfColor.fromHex('#FF6B6B'), // Red
-      PdfColor.fromHex('#A78BFA'), // Purple
-      PdfColor.fromHex('#4ECDC4'), // Teal
-      PdfColor.fromHex('#F59E0B'), // Amber
-      PdfColor.fromHex('#10B981'), // Green
-      PdfColor.fromHex('#EC4899'), // Pink
+      PdfColor.fromHex('#5B9BD5'),
+      PdfColor.fromHex('#FFA940'),
+      PdfColor.fromHex('#FF6B6B'),
+      PdfColor.fromHex('#A78BFA'),
+      PdfColor.fromHex('#4ECDC4'),
+      PdfColor.fromHex('#F59E0B'),
+      PdfColor.fromHex('#10B981'),
+      PdfColor.fromHex('#EC4899'),
     ];
 
     final index = username.hashCode.abs() % colors.length;

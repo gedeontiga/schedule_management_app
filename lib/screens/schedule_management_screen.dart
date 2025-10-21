@@ -1,11 +1,12 @@
 import 'dart:async';
+import 'dart:io' show File;
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:hive/hive.dart';
 import 'package:intl/intl.dart';
-import 'package:open_file/open_file.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:share_plus/share_plus.dart' show ShareResultStatus;
 import 'package:uuid/uuid.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/timezone.dart' as tz;
@@ -83,213 +84,6 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen>
       _hasFetchedSchedule = true;
       _scheduleId = ModalRoute.of(context)!.settings.arguments as String;
       _fetchSchedule();
-    }
-  }
-
-  Future<void> _updateFreeDays() async {
-    setState(() => _isLoading = true);
-    try {
-      final isValid = await _scheduleService.validateFreeDays(
-        _schedule!.id,
-        FirebaseManager.currentUserId!,
-        _freeDays,
-      );
-
-      if (!isValid) {
-        throw Exception('Selected days are not available or already taken');
-      }
-
-      await _scheduleService.updateFreeDays(
-        scheduleId: _schedule!.id,
-        userId: FirebaseManager.currentUserId!,
-        freeDays: _freeDays,
-      );
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                Icon(Icons.check_circle, color: Colors.white),
-                const SizedBox(width: 12),
-                Text('Free days updated successfully'),
-              ],
-            ),
-            backgroundColor: AppColors.success,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-            margin: const EdgeInsets.all(16),
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                Icon(Icons.error_outline, color: Colors.white),
-                const SizedBox(width: 12),
-                Expanded(child: Text('Error: $e')),
-              ],
-            ),
-            backgroundColor: AppColors.error,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-            margin: const EdgeInsets.all(16),
-          ),
-        );
-      }
-    } finally {
-      setState(() => _isLoading = false);
-    }
-  }
-
-  Future<void> _requestPermutation() async {
-    if (_selectedDay1 == null || _selectedDay2 == null) return;
-    setState(() => _isLoading = true);
-    try {
-      final request = PermutationRequest(
-        id: const Uuid().v4(),
-        senderId: FirebaseManager.currentUserId!,
-        receiverId: _schedule!.participants
-            .firstWhere((p) => p.userId != FirebaseManager.currentUserId!)
-            .userId,
-        scheduleId: _schedule!.id,
-        senderDay: _selectedDay1!,
-        receiverDay: _selectedDay2!,
-      );
-      await _notificationService.sendPermutationRequest(request);
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Row(
-              children: [
-                Icon(Icons.send, color: Colors.white),
-                const SizedBox(width: 12),
-                Text('Swap request sent successfully'),
-              ],
-            ),
-            backgroundColor: AppColors.success,
-            behavior: SnackBarBehavior.floating,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(10),
-            ),
-            margin: const EdgeInsets.all(16),
-          ),
-        );
-      }
-      setState(() {
-        _selectedDay1 = null;
-        _selectedDay2 = null;
-      });
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Error: $e'),
-            backgroundColor: AppColors.error,
-          ),
-        );
-      }
-    } finally {
-      setState(() => _isLoading = false);
-    }
-  }
-
-  Future<void> _handlePermutationResponse(String status) async {
-    if (_currentPermutationRequest == null || _schedule == null) return;
-    setState(() => _isLoading = true);
-    try {
-      final requestId = _currentPermutationRequest!['id'];
-      final scheduleId = _currentPermutationRequest!['schedule_id'];
-      final senderId = _currentPermutationRequest!['sender_id'];
-      final receiverId = _currentPermutationRequest!['receiver_id'];
-
-      await _notificationService.updatePermutationRequestStatus(
-        requestId,
-        status,
-        scheduleId,
-        senderId,
-        receiverId,
-      );
-
-      if (status == 'accepted') {
-        final senderDay = _currentPermutationRequest!['sender_day'];
-        final receiverDay = _currentPermutationRequest!['receiver_day'];
-        final senderDayParts = senderDay.split('_');
-        final receiverDayParts = receiverDay.split('_');
-        final senderDayName = senderDayParts[0];
-        final senderDayDate = DateTime.parse(senderDayParts[1]);
-        final receiverDayName = receiverDayParts[0];
-        final receiverDayDate = DateTime.parse(receiverDayParts[1]);
-
-        final currentUser = _participants.firstWhere(
-          (p) => p.userId == FirebaseManager.currentUserId!,
-          orElse: () => throw Exception('Current user not found'),
-        );
-        final requester = _participants.firstWhere(
-          (p) => p.userId == senderId,
-          orElse: () => throw Exception('Requester not found'),
-        );
-
-        final myDayToGive = currentUser.freeDays.firstWhere(
-          (d) =>
-              d.day == receiverDayName &&
-              d.date.year == receiverDayDate.year &&
-              d.date.month == receiverDayDate.month &&
-              d.date.day == receiverDayDate.day,
-          orElse: () => throw Exception('Receiver day not found'),
-        );
-        final theirDayToGive = requester.freeDays.firstWhere(
-          (d) =>
-              d.day == senderDayName &&
-              d.date.year == senderDayDate.year &&
-              d.date.month == senderDayDate.month &&
-              d.date.day == senderDayDate.day,
-          orElse: () => throw Exception('Sender day not found'),
-        );
-
-        final myNewFreeDays = currentUser.freeDays
-            .where((d) => d.date != myDayToGive.date)
-            .toList()
-          ..add(theirDayToGive);
-        final theirNewFreeDays = requester.freeDays
-            .where((d) => d.date != theirDayToGive.date)
-            .toList()
-          ..add(myDayToGive);
-
-        await _scheduleService.updateFreeDays(
-          scheduleId: scheduleId,
-          userId: FirebaseManager.currentUserId!,
-          freeDays: myNewFreeDays,
-        );
-        await _scheduleService.updateFreeDays(
-          scheduleId: scheduleId,
-          userId: senderId,
-          freeDays: theirNewFreeDays,
-        );
-      }
-
-      setState(() {
-        _showPermutationRequestPopup = false;
-        _currentPermutationRequest = null;
-      });
-      await _fetchPendingPermutationRequests();
-      await _fetchSchedule();
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e')),
-        );
-      }
-    } finally {
-      setState(() => _isLoading = false);
     }
   }
 
@@ -529,47 +323,141 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen>
   Future<void> _exportPdf() async {
     if (_schedule == null || !_schedule!.isFullySet) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Schedule is not fully set')),
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(Icons.info_outline, color: Colors.white),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Text('Schedule must be fully set to export PDF'),
+              ),
+            ],
+          ),
+          backgroundColor: AppColors.warning,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(10),
+          ),
+          margin: const EdgeInsets.all(16),
+        ),
       );
       return;
     }
 
-    setState(() => _isLoading = true);
+    // Show loading overlay instead of full screen reload
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Center(
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: AppColors.getSurface(context),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(color: AppColors.primary),
+              const SizedBox(height: 16),
+              Text(
+                'Generating PDF...',
+                style: TextStyle(
+                  color: AppColors.getTextPrimary(context),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
     try {
       final pdfService = PdfService();
-      final file = await pdfService.generateSchedulePdf(_schedule!);
+      final filePath = await pdfService.generateSchedulePdf(_schedule!);
+
+      // Close loading dialog
+      if (mounted) Navigator.pop(context);
+
+      // Share the PDF
+      final result = await pdfService.sharePdf(filePath, _schedule!.name);
+
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('PDF exported to ${file.path}'),
-            action: SnackBarAction(
-              label: 'OPEN',
-              onPressed: () async {
-                final openResult = await OpenFile.open(file.path);
-                if (openResult.type != ResultType.done && mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content:
-                          Text('Error opening file: ${openResult.message}'),
-                    ),
-                  );
-                }
-              },
+        if (result.status == ShareResultStatus.success) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  Icon(Icons.check_circle, color: Colors.white),
+                  const SizedBox(width: 12),
+                  Text('PDF shared successfully'),
+                ],
+              ),
+              backgroundColor: AppColors.success,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              margin: const EdgeInsets.all(16),
             ),
-          ),
-        );
+          );
+        } else if (result.status == ShareResultStatus.dismissed) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.white),
+                  const SizedBox(width: 12),
+                  Text('Share cancelled'),
+                ],
+              ),
+              backgroundColor: AppColors.info,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              margin: const EdgeInsets.all(16),
+            ),
+          );
+        }
+
+        // Clean up temporary file after a delay
+        Future.delayed(const Duration(seconds: 5), () {
+          try {
+            final file = File(filePath);
+            if (file.existsSync()) {
+              file.deleteSync();
+            }
+          } catch (e) {
+            // Ignore cleanup errors
+          }
+        });
       }
     } on PlatformException catch (e) {
+      if (mounted) Navigator.pop(context);
+
       if (e.code == 'PERMISSION_DENIED' && mounted) {
         final permissionService = PermissionService();
         final status = await permissionService.requestStoragePermission();
+
         if (status == PermissionStatus.permanentlyDenied && mounted) {
           await showDialog(
             context: context,
             builder: (context) => AlertDialog(
-              title: const Text('Storage Permission Required'),
+              backgroundColor: AppColors.getSurface(context),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+              title: Row(
+                children: [
+                  Icon(Icons.storage, color: AppColors.warning),
+                  const SizedBox(width: 12),
+                  Text('Storage Permission Required'),
+                ],
+              ),
               content: const Text(
-                'To save PDF files, we need permission to access your device storage. '
+                'To save and share PDF files, we need permission to access your device storage. '
                 'Please grant this permission in your device settings.',
               ),
               actions: [
@@ -577,39 +465,413 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen>
                   onPressed: () => Navigator.pop(context),
                   child: const Text('CANCEL'),
                 ),
-                TextButton(
+                ElevatedButton(
                   onPressed: () async {
                     Navigator.pop(context);
                     await permissionService.openAppSettings();
                   },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
                   child: const Text('OPEN SETTINGS'),
                 ),
               ],
             ),
           );
-        } else {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content:
-                    Text('Storage permission is required to save PDF files'),
+        } else if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Row(
+                children: [
+                  Icon(Icons.error_outline, color: Colors.white),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                        'Storage permission is required to save PDF files'),
+                  ),
+                ],
               ),
-            );
-          }
+              backgroundColor: AppColors.error,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+              margin: const EdgeInsets.all(16),
+            ),
+          );
         }
       } else if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: ${e.message}')),
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.error_outline, color: Colors.white),
+                const SizedBox(width: 12),
+                Expanded(child: Text('Error: ${e.message}')),
+              ],
+            ),
+            backgroundColor: AppColors.error,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            margin: const EdgeInsets.all(16),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) Navigator.pop(context);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.error_outline, color: Colors.white),
+                const SizedBox(width: 12),
+                Expanded(child: Text('Error exporting PDF: $e')),
+              ],
+            ),
+            backgroundColor: AppColors.error,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            margin: const EdgeInsets.all(16),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _updateFreeDays() async {
+    // Show loading overlay
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Center(
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: AppColors.getSurface(context),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(color: AppColors.primary),
+              const SizedBox(height: 16),
+              Text(
+                'Updating schedule...',
+                style: TextStyle(
+                  color: AppColors.getTextPrimary(context),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final isValid = await _scheduleService.validateFreeDays(
+        _schedule!.id,
+        FirebaseManager.currentUserId!,
+        _freeDays,
+      );
+
+      if (!isValid) {
+        throw Exception('Selected days are not available or already taken');
+      }
+
+      await _scheduleService.updateFreeDays(
+        scheduleId: _schedule!.id,
+        userId: FirebaseManager.currentUserId!,
+        freeDays: _freeDays,
+      );
+
+      if (mounted) {
+        Navigator.pop(context); // Close loading dialog
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.check_circle, color: Colors.white),
+                const SizedBox(width: 12),
+                Text('Free days updated successfully'),
+              ],
+            ),
+            backgroundColor: AppColors.success,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            margin: const EdgeInsets.all(16),
+          ),
         );
       }
     } catch (e) {
       if (mounted) {
+        Navigator.pop(context); // Close loading dialog
+
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error exporting PDF: $e')),
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.error_outline, color: Colors.white),
+                const SizedBox(width: 12),
+                Expanded(child: Text('Error: $e')),
+              ],
+            ),
+            backgroundColor: AppColors.error,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            margin: const EdgeInsets.all(16),
+          ),
         );
       }
-    } finally {
-      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _requestPermutation() async {
+    if (_selectedDay1 == null || _selectedDay2 == null) return;
+
+    // Show loading overlay
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Center(
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: AppColors.getSurface(context),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(color: AppColors.primary),
+              const SizedBox(height: 16),
+              Text(
+                'Sending swap request...',
+                style: TextStyle(
+                  color: AppColors.getTextPrimary(context),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final request = PermutationRequest(
+        id: const Uuid().v4(),
+        senderId: FirebaseManager.currentUserId!,
+        receiverId: _schedule!.participants
+            .firstWhere((p) => p.userId != FirebaseManager.currentUserId!)
+            .userId,
+        scheduleId: _schedule!.id,
+        senderDay: _selectedDay1!,
+        receiverDay: _selectedDay2!,
+      );
+
+      await _notificationService.sendPermutationRequest(request);
+
+      if (mounted) {
+        Navigator.pop(context); // Close loading dialog
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.send, color: Colors.white),
+                const SizedBox(width: 12),
+                Text('Swap request sent successfully'),
+              ],
+            ),
+            backgroundColor: AppColors.success,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            margin: const EdgeInsets.all(16),
+          ),
+        );
+
+        setState(() {
+          _selectedDay1 = null;
+          _selectedDay2 = null;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context); // Close loading dialog
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.error_outline, color: Colors.white),
+                const SizedBox(width: 12),
+                Expanded(child: Text('Error: $e')),
+              ],
+            ),
+            backgroundColor: AppColors.error,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            margin: const EdgeInsets.all(16),
+          ),
+        );
+      }
+    }
+  }
+
+  Future<void> _handlePermutationResponse(String status) async {
+    if (_currentPermutationRequest == null || _schedule == null) return;
+
+    // Show loading overlay
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Center(
+        child: Container(
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: AppColors.getSurface(context),
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(color: AppColors.primary),
+              const SizedBox(height: 16),
+              Text(
+                'Processing request...',
+                style: TextStyle(
+                  color: AppColors.getTextPrimary(context),
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
+    try {
+      final requestId = _currentPermutationRequest!['id'];
+      final scheduleId = _currentPermutationRequest!['schedule_id'];
+      final senderId = _currentPermutationRequest!['sender_id'];
+      final receiverId = _currentPermutationRequest!['receiver_id'];
+
+      await _notificationService.updatePermutationRequestStatus(
+        requestId,
+        status,
+        scheduleId,
+        senderId,
+        receiverId,
+      );
+
+      if (status == 'accepted') {
+        final senderDay = _currentPermutationRequest!['sender_day'];
+        final receiverDay = _currentPermutationRequest!['receiver_day'];
+        final senderDayParts = senderDay.split('_');
+        final receiverDayParts = receiverDay.split('_');
+        final senderDayName = senderDayParts[0];
+        final senderDayDate = DateTime.parse(senderDayParts[1]);
+        final receiverDayName = receiverDayParts[0];
+        final receiverDayDate = DateTime.parse(receiverDayParts[1]);
+
+        final currentUser = _participants.firstWhere(
+          (p) => p.userId == FirebaseManager.currentUserId!,
+          orElse: () => throw Exception('Current user not found'),
+        );
+        final requester = _participants.firstWhere(
+          (p) => p.userId == senderId,
+          orElse: () => throw Exception('Requester not found'),
+        );
+
+        final myDayToGive = currentUser.freeDays.firstWhere(
+          (d) =>
+              d.day == receiverDayName &&
+              d.date.year == receiverDayDate.year &&
+              d.date.month == receiverDayDate.month &&
+              d.date.day == receiverDayDate.day,
+          orElse: () => throw Exception('Receiver day not found'),
+        );
+        final theirDayToGive = requester.freeDays.firstWhere(
+          (d) =>
+              d.day == senderDayName &&
+              d.date.year == senderDayDate.year &&
+              d.date.month == senderDayDate.month &&
+              d.date.day == senderDayDate.day,
+          orElse: () => throw Exception('Sender day not found'),
+        );
+
+        final myNewFreeDays = currentUser.freeDays
+            .where((d) => d.date != myDayToGive.date)
+            .toList()
+          ..add(theirDayToGive);
+        final theirNewFreeDays = requester.freeDays
+            .where((d) => d.date != theirDayToGive.date)
+            .toList()
+          ..add(myDayToGive);
+
+        await _scheduleService.updateFreeDays(
+          scheduleId: scheduleId,
+          userId: FirebaseManager.currentUserId!,
+          freeDays: myNewFreeDays,
+        );
+        await _scheduleService.updateFreeDays(
+          scheduleId: scheduleId,
+          userId: senderId,
+          freeDays: theirNewFreeDays,
+        );
+      }
+
+      if (mounted) {
+        Navigator.pop(context); // Close loading dialog
+      }
+
+      setState(() {
+        _showPermutationRequestPopup = false;
+        _currentPermutationRequest = null;
+      });
+
+      await _fetchPendingPermutationRequests();
+    } catch (e) {
+      if (mounted) {
+        Navigator.pop(context); // Close loading dialog
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Row(
+              children: [
+                Icon(Icons.error_outline, color: Colors.white),
+                const SizedBox(width: 12),
+                Expanded(child: Text('Error: $e')),
+              ],
+            ),
+            backgroundColor: AppColors.error,
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
+            margin: const EdgeInsets.all(16),
+          ),
+        );
+      }
     }
   }
 
@@ -636,7 +898,16 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen>
         weeks = 2;
         break;
       case '1 month':
-        weeks = 5;
+        weeks = 4; // Changed from 5
+        break;
+      case '2 months':
+        weeks = 8;
+        break;
+      case '3 months':
+        weeks = 12;
+        break;
+      case '6 months':
+        weeks = 26;
         break;
       default:
         weeks = int.parse(_schedule!.duration.split(' ')[0]);
@@ -1253,40 +1524,46 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen>
 
       _scheduleSubscription =
           _scheduleService.getSchedule(_scheduleId!).listen((schedule) {
-        setState(() {
-          _schedule = schedule;
-          _availableWeeklyDays = _getWeeklyAvailableDays();
-          _calculateAvailableTimeSlots();
-        });
+        if (mounted) {
+          setState(() {
+            _schedule = schedule;
+            _availableWeeklyDays = _getWeeklyAvailableDays();
+            _calculateAvailableTimeSlots();
+          });
+        }
       });
 
       _participantSubscription =
           _scheduleService.getParticipants(_scheduleId!).listen((participants) {
-        setState(() {
-          _participants = participants;
-          final currentUser = participants.firstWhere(
-            (p) => p.userId == FirebaseManager.currentUserId!,
-            orElse: () => Participant(
-              userId: FirebaseManager.currentUserId!,
-              scheduleId: _scheduleId!,
-              roles: [],
-              freeDays: [],
-            ),
-          );
-          _freeDays = currentUser.freeDays;
-          if (_schedule != null) {
-            _schedule = _schedule!.copyWith(participants: participants);
-          }
-          _availableWeeklyDays = _getWeeklyAvailableDays();
-          _calculateAvailableTimeSlots();
-        });
+        if (mounted) {
+          setState(() {
+            _participants = participants;
+            final currentUser = participants.firstWhere(
+              (p) => p.userId == FirebaseManager.currentUserId!,
+              orElse: () => Participant(
+                userId: FirebaseManager.currentUserId!,
+                scheduleId: _scheduleId!,
+                roles: [],
+                freeDays: [],
+              ),
+            );
+            _freeDays = currentUser.freeDays;
+            if (_schedule != null) {
+              _schedule = _schedule!.copyWith(participants: participants);
+            }
+            _availableWeeklyDays = _getWeeklyAvailableDays();
+            _calculateAvailableTimeSlots();
+          });
+        }
       });
 
       final alarmBox = Hive.box('alarms');
       _alarms.addAll(alarmBox.toMap().cast<String, String>());
 
       await _fetchPendingPermutationRequests();
-      _animationController.forward();
+      if (!_animationController.isCompleted) {
+        _animationController.forward();
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1295,7 +1572,9 @@ class ScheduleManagementScreenState extends State<ScheduleManagementScreen>
         Navigator.pop(context);
       }
     } finally {
-      setState(() => _isLoading = false);
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 

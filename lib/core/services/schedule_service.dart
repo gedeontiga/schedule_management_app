@@ -693,7 +693,7 @@ class ScheduleService {
         weeks = 3;
         break;
       case '1 month':
-        weeks = 4;
+        weeks = 4; // Changed from default calculation
         break;
       case '2 months':
         weeks = 8;
