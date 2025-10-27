@@ -41,6 +41,9 @@ class HomeScreenState extends State<HomeScreen> with TickerProviderStateMixin {
         _isError = true;
         _errorMessage = 'User not logged in';
       });
+      if (mounted) {
+        Navigator.pushReplacementNamed(context, '/login');
+      }
       return;
     }
 

@@ -23,10 +23,10 @@ class CalendarView extends StatefulWidget {
   });
 
   @override
-  State<CalendarView> createState() => _CalendarViewState();
+  State<CalendarView> createState() => CalendarViewState();
 }
 
-class _CalendarViewState extends State<CalendarView>
+class CalendarViewState extends State<CalendarView>
     with SingleTickerProviderStateMixin {
   DateTime? _selectedDay;
   late DateTime _focusedDay;
@@ -49,34 +49,22 @@ class _CalendarViewState extends State<CalendarView>
   void _initializeFocusedDay() {
     final startDate = widget.schedule.startDate;
     final endDate = _getEndDate();
-    final now = DateTime.now();
-
-    // Focus on current date if it's within schedule range
-    if (now.isAfter(startDate) && now.isBefore(endDate)) {
-      _focusedDay = now;
-    } else if (now.isBefore(startDate)) {
-      // If schedule hasn't started, focus on start date
-      _focusedDay = startDate;
-    } else {
-      // If schedule has ended, focus on end date
-      _focusedDay = endDate;
-    }
+    _focusedDay =
+        DateTime.now().isAfter(startDate) && DateTime.now().isBefore(endDate)
+            ? DateTime.now()
+            : startDate;
   }
 
   @override
   void didUpdateWidget(CalendarView oldWidget) {
     super.didUpdateWidget(oldWidget);
-
-    // Only reset focus if schedule changed, not on free days update
+    // UPDATED: Only reinitialize if schedule changed, preserve focus for data updates
     if (oldWidget.schedule.id != widget.schedule.id ||
         oldWidget.schedule.startDate != widget.schedule.startDate ||
         oldWidget.schedule.duration != widget.schedule.duration) {
       _initializeFocusedDay();
     }
-    // Keep current focus when only free days are updated
-    else if (oldWidget.freeDays.length != widget.freeDays.length) {
-      // Don't change _focusedDay - keep current view
-    }
+    // Keep current _focusedDay when only freeDays or participants change
   }
 
   DateTime _getEndDate() {
@@ -87,9 +75,6 @@ class _CalendarViewState extends State<CalendarView>
         break;
       case '2 weeks':
         weeks = 2;
-        break;
-      case '3 weeks':
-        weeks = 3;
         break;
       case '1 month':
         weeks = 4;
@@ -104,7 +89,7 @@ class _CalendarViewState extends State<CalendarView>
         weeks = 26;
         break;
       default:
-        weeks = int.tryParse(widget.schedule.duration.split(' ')[0]) ?? 1;
+        weeks = int.parse(widget.schedule.duration.split(' ')[0]);
     }
     return widget.schedule.startDate.add(Duration(days: weeks * 7));
   }
@@ -112,7 +97,6 @@ class _CalendarViewState extends State<CalendarView>
   Map<DateTime, List<Map<String, dynamic>>> _buildEventsMap() {
     final events = <DateTime, List<Map<String, dynamic>>>{};
 
-    // Add my free days
     for (var day in widget.freeDays) {
       final date = DateTime(day.date.year, day.date.month, day.date.day);
       events[date] = [
@@ -124,7 +108,6 @@ class _CalendarViewState extends State<CalendarView>
       ];
     }
 
-    // Add other participants' days
     for (var participant in widget.participants) {
       if (participant.userId != FirebaseManager.currentUserId) {
         for (var day in participant.freeDays) {
@@ -306,7 +289,6 @@ class _CalendarViewState extends State<CalendarView>
       child: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          // Header with date range
           Container(
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -396,8 +378,6 @@ class _CalendarViewState extends State<CalendarView>
               ],
             ),
           ),
-
-          // Calendar
           Padding(
             padding: const EdgeInsets.all(12),
             child: TableCalendar(
@@ -567,8 +547,6 @@ class _CalendarViewState extends State<CalendarView>
               },
             ),
           ),
-
-          // Legend
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             decoration: BoxDecoration(
